@@ -213,3 +213,44 @@ def test_pending_confirmation_consumes_the_next_utterance():
     assert phase == PHASE_IDLE
     assert assistant.followups == ["sim"]
     typer.assert_not_called()
+
+
+def test_kiris_dispatch_routes_when_matcher_and_kiris_dispatch_present():
+    from laris.daemon import route_utterance
+
+    vs, _, _ = _make_voice_session()
+    typer = MagicMock()
+    dispatch_calls = []
+    def stub_matcher(text): return "abre o axon"
+    def stub_dispatch(text): dispatch_calls.append(text); return True
+
+    phase = route_utterance(
+        "kiris abre o axon", vs, typer,
+        agent_phrase_matcher=stub_matcher,
+        kiris_dispatch=stub_dispatch,
+    )
+
+    assert phase == PHASE_IDLE
+    assert dispatch_calls == ["abre o axon"]
+    typer.assert_not_called()
+
+
+def test_kiris_dispatch_skipped_when_offline_returns_false():
+    """When kiris_dispatch returns False (kiris offline/error), route_utterance
+    falls through to plain dictation - the utterance is typed into the focused app."""
+    from laris.daemon import route_utterance
+
+    vs, _, _ = _make_voice_session()
+    typer = MagicMock()
+    def stub_matcher(text): return "abre o axon"
+    def stub_dispatch_offline(text): return False
+
+    phase = route_utterance(
+        "kiris abre o axon", vs, typer,
+        agent_phrase_matcher=stub_matcher,
+        kiris_dispatch=stub_dispatch_offline,
+    )
+
+    assert phase == PHASE_IDLE
+    # Utterance is typed as dictation (kiris offline -> fallback)
+    typer.assert_called_once_with("kiris abre o axon")

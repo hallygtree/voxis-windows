@@ -21,12 +21,14 @@ def route_utterance(
     typer: Callable[[str], None],
     assistant: AssistantProtocol | None = None,
     agent_phrase_matcher: Callable[[str], str | None] | None = None,
+    kiris_dispatch: Callable[[str], bool] | None = None,
 ) -> str:
     """One PTT key, intent comes from the utterance itself: a pending
     assistant confirmation consumes the utterance first, "kiris <pedido>"
-    goes to the LLM assistant, mid-flow speech continues the command flow,
-    "abrir/fechar <projeto>" enters it, anything else is dictation into the
-    focused app."""
+    goes to the LLM assistant (in-process AssistantProtocol OR
+    kiris_dispatch HTTP callback for the three-process daemon), mid-flow
+    speech continues the command flow, "abrir/fechar <projeto>" enters it,
+    anything else is dictation into the focused app."""
     from laris.phrase_matching import match_close_phrase, match_open_phrase
 
     voice_session.expire_if_stale()
@@ -36,9 +38,18 @@ def route_utterance(
         return voice_session.handle_utterance(text)
 
     agent_request = agent_phrase_matcher(text) if agent_phrase_matcher else None
-    if assistant is not None and agent_request is not None:
-        assistant.handle(agent_request)
-        return PHASE_IDLE
+    if agent_request is not None:
+        if kiris_dispatch is not None:
+            # Three-process mode: POST to kiris /ask. On True, utterance consumed.
+            # On False (kiris offline/error), FALL THROUGH to dictation so the
+            # user's spoken "kiris abre o axon" is typed as plain words instead
+            # of being silently dropped.
+            if kiris_dispatch(agent_request):
+                return PHASE_IDLE
+        elif assistant is not None:
+            # In-process composition mode (kept for backward compat and dev tests)
+            assistant.handle(agent_request)
+            return PHASE_IDLE
 
     open_target = match_open_phrase(text)
     if open_target is not None:
@@ -108,7 +119,14 @@ def _run_hands_free_session(vad, stt, typer, overlay, voice_queue, active, ducke
         print("[Voice] hands-free OFF")
 
 
-def run(make_voice_session, make_assistant=lambda: None, agent_phrase_matcher=None, voice_queue=None, overlay_url="") -> None:
+def run(
+    make_voice_session: Callable[[], VoiceSession],
+    make_assistant: Callable[[], AssistantProtocol | None] = lambda: None,
+    agent_phrase_matcher: Callable[[str], str | None] | None = None,
+    kiris_dispatch: Callable[[str], bool] | None = None,
+    voice_queue=None,
+    overlay_url: str = "",
+) -> None:
     """Runs the PTT voice loop on the calling thread - callers run this on a
     background daemon thread (see claude-code-ops's backend/main.py)."""
     from laris.dictation import type_text
@@ -161,8 +179,10 @@ def run(make_voice_session, make_assistant=lambda: None, agent_phrase_matcher=No
                 text = stt.transcribe(audio, config.SAMPLE_RATE)
                 if text:
                     phase = route_utterance(
-                        text, voice_session, type_text, assistant=assistant,
+                        text, voice_session, type_text,
+                        assistant=assistant,
                         agent_phrase_matcher=agent_phrase_matcher,
+                        kiris_dispatch=kiris_dispatch,
                     )
                     print(f"[Voice] {kind}: {text!r} ({duration:.1f}s, amp={amplitude:.4f}) -> phase={phase}")
                 else:
