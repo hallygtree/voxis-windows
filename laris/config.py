@@ -11,6 +11,8 @@ MAX_SPEECH_DURATION_S = 30
 VAD_THRESHOLD = 0.5
 VAD_MIN_SILENCE_MS = 400
 
+NOISE_REDUCTION: str = os.environ.get("NOISE_REDUCTION", "on")  # "on" | "off"
+
 # q4: benchmarked 2026-07-11 vs the f16 turbo - 0.76s vs 0.95s per utterance
 # and ~1.2GB less resident RAM, transcription quality tied on pt-BR samples.
 # Revert with STT_MODEL=mlx-community/whisper-large-v3-turbo if quality dips.

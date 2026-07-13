@@ -3,6 +3,7 @@ pynput>=1.8.2
 pyobjc-framework-ApplicationServices>=10.0
 torch>=2.2.0
 silero-vad>=5.1
+deepfilternet>=0.4.3
 numpy>=1.24.0
 mlx-whisper>=0.4.0
 mlx>=0.31.2

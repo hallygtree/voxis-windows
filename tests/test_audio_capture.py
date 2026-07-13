@@ -101,3 +101,40 @@ def test_stream_utterances_reports_chunks_live(monkeypatch):
     list(vad.stream_utterances(should_stop=lambda: next(stops), on_chunk=seen.append))
 
     assert len(seen) == 1
+
+
+def test_denoise_off_returns_audio_unchanged():
+    """When NOISE_REDUCTION=off, the denoise wrapper is a passthrough."""
+    import numpy as np
+
+    from laris.audio_capture import _denoise_chunk
+
+    chunk = np.ones(512, dtype=np.float32) * 0.5
+    result = _denoise_chunk(chunk, enabled=False)
+    assert np.array_equal(result, chunk)
+
+
+def test_denoise_on_changes_audio():
+    """When NOISE_REDUCTION=on and DFN3 is loaded, the output differs from input
+    (a real denoiser changes the signal)."""
+    import numpy as np
+
+    from laris.audio_capture import _denoise_chunk
+
+    chunk = np.random.randn(512 * 8).astype(np.float32) * 0.3
+    result = _denoise_chunk(chunk, enabled=True)
+    assert result.dtype == np.float32
+    assert len(result) == len(chunk)
+    assert not np.array_equal(result, chunk)
+
+
+def test_denoise_handles_short_chunk():
+    """Shorter-than-frame chunks must not crash the denoiser — buffer them."""
+    import numpy as np
+
+    from laris.audio_capture import _denoise_chunk
+
+    chunk = np.ones(100, dtype=np.float32) * 0.5
+    result = _denoise_chunk(chunk, enabled=True)
+    assert len(result) == 100
+    assert result.dtype == np.float32
