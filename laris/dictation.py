@@ -42,6 +42,9 @@ def type_text(text: str) -> None:
     arbitrary strings is slow and fragile. Best-effort restore of the
     previous clipboard afterwards.
     """
+    from laris.app_context import format_for_focus
+    text = format_for_focus(text)
+
     previous_clipboard: bytes | None = None
     try:
         previous = subprocess.run(
