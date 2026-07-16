@@ -17,4 +17,6 @@ NOISE_REDUCTION: str = os.environ.get("NOISE_REDUCTION", "on")  # "on" | "off"
 # and ~1.2GB less resident RAM, transcription quality tied on pt-BR samples.
 # Revert with STT_MODEL=mlx-community/whisper-large-v3-turbo if quality dips.
 STT_MODEL: str = os.environ.get("STT_MODEL", "mlx-community/whisper-large-v3-turbo-q4")
-STT_LANGUAGE: str = "pt"
+# empty string = Whisper auto-detect per utterance (used by miris for
+# bilingual meetings); laris dictation keeps the pt-BR lock by default
+STT_LANGUAGE: str = os.environ.get("STT_LANGUAGE", "pt")

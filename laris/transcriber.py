@@ -49,7 +49,7 @@ class Transcriber:
         result = self._mlx_whisper.transcribe(
             audio.astype(np.float32),
             path_or_hf_repo=self.model,
-            language=config.STT_LANGUAGE,
+            language=config.STT_LANGUAGE or None,  # "" -> auto-detect
             task="transcribe",
             word_timestamps=False,   # do NOT change: known memory leak with True
             fp16=True,
