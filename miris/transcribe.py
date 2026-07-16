@@ -47,12 +47,28 @@ def speech_spans(audio: np.ndarray, sr: int = TARGET_SR) -> list[tuple[int, int]
     return [(t["start"], t["end"]) for t in stamps]
 
 
+def collapse_repetitions(text: str, max_run: int = 3) -> str:
+    """Cap consecutive repeated words - Whisper's hallucination mode on noisy
+    or overlapping audio repeats one token hundreds of times."""
+    out: list[str] = []
+    run = 0
+    for word in text.split():
+        if out and word.casefold() == out[-1].casefold():
+            run += 1
+            if run >= max_run:
+                continue
+        else:
+            run = 0
+        out.append(word)
+    return " ".join(out)
+
+
 def transcribe_channel(path: Path, speaker: str, transcriber,
                        spans_fn=speech_spans) -> list[Segment]:
     audio = load_wav_mono16k(path)
     segments = []
     for start, end in spans_fn(audio):
-        text = transcriber.transcribe(audio[start:end])
+        text = collapse_repetitions(transcriber.transcribe(audio[start:end]))
         if text:
             segments.append(Segment(start / TARGET_SR, end / TARGET_SR, speaker, text))
     return segments

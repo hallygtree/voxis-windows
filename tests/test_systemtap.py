@@ -29,7 +29,13 @@ def test_lifecycle_start_alive_stop(tmp_path):
     out = tmp_path / "out.wav"
     tap = SystemTap(out, binary=_fake_binary(tmp_path))
     tap.start()
-    time.sleep(0.3)
+    # the fake helper writes the file only AFTER installing its TERM trap;
+    # polling for it (instead of a fixed sleep) kills the SIGTERM race
+    for _ in range(100):
+        if out.exists():
+            break
+        time.sleep(0.05)
+    assert out.exists()
     assert tap.alive()
     tap.stop()
     assert not tap.alive()

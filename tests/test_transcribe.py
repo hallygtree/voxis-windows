@@ -55,6 +55,13 @@ def test_transcribe_channel_uses_spans_and_transcriber(tmp_path):
     ]
 
 
+def test_collapse_repetitions_caps_hallucinated_runs():
+    text = "essas " + "pessoas " * 200 + "também"
+    result = transcribe.collapse_repetitions(text.strip())
+    assert result == "essas pessoas pessoas pessoas também"
+    assert transcribe.collapse_repetitions("um dois três") == "um dois três"
+
+
 def test_merge_interleaves_by_timestamp():
     me = [Segment(0.0, 1.0, "Eu", "oi"), Segment(65.0, 66.0, "Eu", "tchau")]
     them = [Segment(2.5, 4.0, "Eles", "olá")]

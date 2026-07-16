@@ -1,5 +1,6 @@
 """Post-meeting pipeline: WAVs -> transcript -> notes -> vault note."""
 import json
+import os
 from pathlib import Path
 
 from miris import notes as notes_mod
@@ -11,6 +12,9 @@ WAV_HEADER_BYTES = 44
 
 
 def _default_transcriber_factory():
+    # meetings are bilingual (pt-BR + English): default Whisper to auto-detect
+    # per utterance unless the user pinned STT_LANGUAGE themselves
+    os.environ.setdefault("STT_LANGUAGE", "")
     from laris.transcriber import Transcriber
     return Transcriber()
 
