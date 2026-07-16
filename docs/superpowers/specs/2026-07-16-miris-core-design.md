@@ -26,6 +26,7 @@ zero code copied).
 | Transcription timing | Post-meeting (on `miris stop`) | Simpler; live transcript was not requested |
 | STT | `laris.Transcriber` (mlx-whisper, pt-BR, Metal) | Already tuned and production-proven in LARIS |
 | Summary/classification LLM | `agy -p` (Antigravity CLI, Gemini) | User has Gemini subscription; validated 2026-07-16: clean JSON out, correct category, ~8s. Note: gemini-cli itself stopped serving AI Pro/Ultra logins on 2026-06-18 — agy is the supported path |
+| Model | `Gemini 3.5 Flash (Medium)` (agy `--model` takes the display name verbatim) | Summarization is easy; Flash spends least quota. Upgrade path: `Gemini 3.1 Pro (Low)` via config if summaries feel shallow. Command+model live in `llm_command` config, not code — offloads the idle Google subscription and keeps Anthropic/OpenAI quota for coding |
 | Classification | Fixed category list from config; LLM picks from the list only | Open-ended classification misfiles notes |
 | Fallback | Unparseable/unknown category → `~/vault/inbox/` | Never guess a destination; never lose a note |
 | Start/stop | Manual CLI (`miris start` / `miris stop`) | Auto-detect is a later layer; auto-recording without confirmation is a privacy footgun |
@@ -81,6 +82,9 @@ miris stop
   ```toml
   vault_root = "~/vault"
   inbox = "inbox"
+  # provider-agnostic on purpose: Google killed gemini-cli logins mid-2026;
+  # swapping to "claude -p" / "codex exec" must be a config edit, not code.
+  llm_command = ["agy", "--model", "Gemini 3.5 Flash (Medium)", "-p"]
   [categories]
   trabalho-empresa-x = "work/empresa-x/meetings"
   minhas-empresas    = "own/meetings"
