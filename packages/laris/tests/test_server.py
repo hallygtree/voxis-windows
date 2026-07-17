@@ -1,6 +1,14 @@
 from fastapi.testclient import TestClient
 
 
+def test_frontend_dir_uses_pyinstaller_resource_dir(monkeypatch, tmp_path):
+    import laris.server as server
+
+    monkeypatch.setattr(server.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    assert server._frontend_dir() == tmp_path / "frontend"
+
+
 def test_overlay_route_serves_html():
     from laris.server import build_app
 

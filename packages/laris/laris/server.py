@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import queue as thread_queue
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -18,7 +19,11 @@ from laris import auth as laris_auth
 from laris.events import VoiceEvent
 from laris import orb_theme
 
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+def _frontend_dir() -> Path:
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).parent.parent)) / "frontend"
+
+
+FRONTEND_DIR = _frontend_dir()
 
 
 def get_voice_event_queue(app: FastAPI) -> "thread_queue.Queue[VoiceEvent]":
