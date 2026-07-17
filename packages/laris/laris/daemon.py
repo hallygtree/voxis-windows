@@ -129,22 +129,21 @@ def run(
 ) -> None:
     """Runs the PTT voice loop on the calling thread - callers run this on a
     background daemon thread (see claude-code-ops's backend/main.py)."""
-    from laris.dictation import type_text
-    from laris.ducking import AudioDucker
     from laris.hotkey import PushToTalk
-    from laris.overlay import Overlay
-    from laris.transcriber import Transcriber
+    from laris.platform import get_backend
 
     if voice_queue is None:
         import queue
         voice_queue = queue.Queue()
 
-    stt = Transcriber()
-    stt.warm()
+    backend = get_backend()
+    backend.warm()
+    stt = backend
+    type_text = backend.type_text
     voice_session = make_voice_session()
     assistant = make_assistant()
-    overlay = Overlay(url=overlay_url)
-    ducker = AudioDucker()
+    overlay = backend.make_overlay(overlay_url)
+    ducker = backend.make_ducker()
     ptt = PushToTalk(config.DICTATE_KEY)
     ptt.start()
     vad = None
@@ -204,14 +203,15 @@ def run_always_on(make_voice_session, voice_queue=None) -> None:
     uses. Heavy ML imports are deferred here so importing laris.daemon
     doesn't require torch/mlx_whisper to be installed."""
     from laris.audio_capture import VadCapture
-    from laris.transcriber import Transcriber
+    from laris.platform import get_backend
 
     if voice_queue is None:
         import queue
         voice_queue = queue.Queue()
 
-    stt = Transcriber()
-    stt.warm()
+    backend = get_backend()
+    backend.warm()
+    stt = backend
     voice_session = make_voice_session()
 
     for audio, sample_rate in VadCapture().stream_utterances():
