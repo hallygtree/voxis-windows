@@ -141,8 +141,11 @@ fn set_tray_icon(tray: &TrayIcon, recording: bool) {
         (include_bytes!("../icons/tray-idle.png"), true)
     };
     if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
-        let _ = tray.set_icon_as_template(template);
+        // icon first, template after: macOS applies the template attribute to
+        // the CURRENT image - the reverse order leaves the new image raw-color
+        // and it vanishes against a similarly colored wallpaper
         let _ = tray.set_icon(Some(img));
+        let _ = tray.set_icon_as_template(template);
     }
 }
 
@@ -261,6 +264,11 @@ fn handle_menu(app: &AppHandle, id: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // must be the first registered plugin; a second launch lands here in
+        // the FIRST instance and we just surface the settings window
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            commands::show_settings_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
