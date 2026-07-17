@@ -1,6 +1,8 @@
 """Orb theme config: archetype x palette x position, persisted as JSON.
 Single source of truth for the /theme endpoint, overlay_app and the menu bar."""
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from laris import config
@@ -31,8 +33,30 @@ class ThemeValidationError(ValueError):
     pass
 
 
+def _write_atomic(path: Path, data: dict) -> None:
+    """tmp + os.replace: the overlay polls this file from another process;
+    a partial write would read as corrupt and reset the user's theme."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=2))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def theme_path() -> Path:
+    """Resolved location of orb-theme.json (public - overlay_app polls it)."""
+    return Path(config.ORB_THEME_PATH).expanduser()
+
+
 def _theme_path(path: Path | None) -> Path:
-    return path or Path(config.ORB_THEME_PATH).expanduser()
+    return path or theme_path()
 
 
 def _validate(theme: dict) -> None:
@@ -64,8 +88,7 @@ def load_theme(path: Path | None = None) -> dict:
         _validate(theme)
         return theme
     except (OSError, ValueError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(DEFAULTS, indent=2), encoding="utf-8")
+        _write_atomic(path, DEFAULTS)
         return dict(DEFAULTS)
 
 
@@ -78,8 +101,7 @@ def save_theme(updates: dict, path: Path | None = None) -> dict:
             f"unknown keys: {sorted(unknown)}; valid: {sorted(DEFAULTS)}")
     theme = {**load_theme(path), **updates}
     _validate(theme)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(theme, indent=2), encoding="utf-8")
+    _write_atomic(path, theme)
     return theme
 
 

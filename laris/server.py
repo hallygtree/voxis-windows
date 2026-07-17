@@ -10,12 +10,13 @@ import queue as thread_queue
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from laris import auth as laris_auth
 from laris.events import VoiceEvent
+from laris import orb_theme
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
@@ -37,6 +38,22 @@ def build_app(token: str, voice_queue: "thread_queue.Queue[VoiceEvent] | None" =
     @app.get("/overlay")
     def overlay_page():
         return FileResponse(FRONTEND_DIR / "overlay.html")
+
+    @app.get("/theme")
+    def get_theme(token: str | None = None):
+        if not laris_auth.token_valid(token, app.state.token):
+            raise HTTPException(status_code=403, detail="invalid token")
+        return {"theme": orb_theme.load_theme(), "palettes": orb_theme.PALETTES}
+
+    @app.post("/theme")
+    def post_theme(updates: dict, token: str | None = None):
+        if not laris_auth.token_valid(token, app.state.token):
+            raise HTTPException(status_code=403, detail="invalid token")
+        try:
+            theme = orb_theme.save_theme(updates)
+        except orb_theme.ThemeValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"theme": theme, "palettes": orb_theme.PALETTES}
 
     @app.websocket("/ws/voice")
     async def ws_voice(websocket: WebSocket, token: str | None = None):
