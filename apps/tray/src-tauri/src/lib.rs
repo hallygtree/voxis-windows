@@ -293,7 +293,10 @@ pub fn run() {
                         .map(|r| r.join("engine").join("laris-engine.exe"))
                         .filter(|p| p.exists());
                     match engine {
-                        Some(bin) => laris::LarisDaemon::with_engine(bin),
+                        Some(bin) => laris::LarisDaemon::with_engine(
+                            bin,
+                            settings::config_dir().join("laris-engine.log"),
+                        ),
                         None => laris::LarisDaemon::new(PathBuf::from(&config.laris_dir)),
                     }
                 }

@@ -3,7 +3,7 @@
 //! daemon is detected via alive() but never killed by the tray.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +67,7 @@ pub struct LarisDaemon {
     child: Option<Child>,
     laris_dir: PathBuf,
     engine_bin: Option<PathBuf>, // frozen engine (Windows); None = dev venv python
+    log_path: Option<PathBuf>,   // where the frozen engine's stdout/stderr are captured
 }
 
 impl LarisDaemon {
@@ -75,15 +76,20 @@ impl LarisDaemon {
             child: None,
             laris_dir,
             engine_bin: None,
+            log_path: None,
         }
     }
 
-    /// Run a self-contained frozen engine binary (Windows packaged build).
-    pub fn with_engine(engine_bin: PathBuf) -> Self {
+    /// Run a self-contained frozen engine binary (Windows packaged build). The
+    /// frozen exe is windowed (no console), so its stdout/stderr - including
+    /// Python tracebacks and native-lib errors - are redirected to log_path,
+    /// the only diagnostics a remote tester's crash leaves behind.
+    pub fn with_engine(engine_bin: PathBuf, log_path: PathBuf) -> Self {
         Self {
             child: None,
             laris_dir: engine_bin.parent().map(Path::to_path_buf).unwrap_or_default(),
             engine_bin: Some(engine_bin),
+            log_path: Some(log_path),
         }
     }
 
@@ -102,10 +108,21 @@ impl LarisDaemon {
             return Ok(()); // don't orphan a live child by overwriting its handle
         }
         let child = match &self.engine_bin {
-            Some(bin) => Command::new(bin)
-                .current_dir(&self.laris_dir)
-                .spawn()
-                .map_err(|e| format!("{}: {e}", bin.display()))?,
+            Some(bin) => {
+                let mut cmd = Command::new(bin);
+                cmd.current_dir(&self.laris_dir);
+                // Capture the windowed engine's output; on failure just inherit
+                // (a missing log must never stop the engine from starting).
+                if let Some(log) = &self.log_path {
+                    if let Ok(f) = std::fs::File::create(log) {
+                        if let Ok(f2) = f.try_clone() {
+                            cmd.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
+                        }
+                    }
+                }
+                cmd.spawn()
+                    .map_err(|e| format!("{}: {e}", bin.display()))?
+            }
             None => {
                 let python = self.laris_dir.join(".venv/bin/python");
                 Command::new(&python)
@@ -191,15 +208,29 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let engine = tmp.path().join("laris-engine");
-        fs::write(&engine, "#!/bin/sh\nsleep 60\n").unwrap();
+        fs::write(&engine, "#!/bin/sh\necho booted\nsleep 60\n").unwrap();
         fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = tmp.path().join("laris-engine.log");
 
         // when given an explicit engine binary, the daemon runs it directly
-        // instead of `.venv/bin/python -m laris`
-        let mut daemon = LarisDaemon::with_engine(engine);
+        // instead of `.venv/bin/python -m laris`, capturing its output to the log
+        let mut daemon = LarisDaemon::with_engine(engine, log.clone());
         assert!(!daemon.owns_running());
         daemon.spawn().unwrap();
         assert!(daemon.owns_running());
+
+        // the engine's stdout is redirected to the log (poll: the echo races the read)
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut captured = false;
+        while std::time::Instant::now() < deadline {
+            if fs::read_to_string(&log).map(|s| s.contains("booted")).unwrap_or(false) {
+                captured = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(captured, "engine stdout was not captured to the log file");
+
         daemon.stop();
         assert!(!daemon.owns_running());
     }
