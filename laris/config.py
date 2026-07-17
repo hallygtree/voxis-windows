@@ -20,3 +20,7 @@ STT_MODEL: str = os.environ.get("STT_MODEL", "mlx-community/whisper-large-v3-tur
 # empty string = Whisper auto-detect per utterance (used by miris for
 # bilingual meetings); laris dictation keeps the pt-BR lock by default
 STT_LANGUAGE: str = os.environ.get("STT_LANGUAGE", "pt")
+
+ORB_THEME_PATH: str = os.environ.get(
+    "ORB_THEME_PATH", "~/.config/voice-at/orb-theme.json"
+)
