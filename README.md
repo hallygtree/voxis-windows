@@ -20,6 +20,22 @@ Standalone mode is dictation-only (no tmux session targeting - that needs a
 `VoiceSession` wired to a real session backend, which is what
 `claude-code-ops` does).
 
+## Orb themes
+
+The desktop orb is themeable: 3 archetypes (waveform - default, reactor,
+faceted) x 4 palettes (blade - default, noir, acid, ember), plus position
+presets (center by default) and size. Config lives in
+`~/.config/voice-at/orb-theme.json` and can be changed live:
+
+```bash
+curl -X POST "http://127.0.0.1:8421/theme?token=$TOK" \
+     -H 'Content-Type: application/json' \
+     -d '{"archetype": "waveform", "palette": "blade", "position": "center"}'
+```
+
+Visual dev/smoke without the daemon: open `/overlay?demo=1` on the overlay
+server (fake voice cycle, no mic needed).
+
 ## Testing
 
 ```bash
