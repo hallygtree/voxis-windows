@@ -24,6 +24,10 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: apps/tray/src-tauri
+          # the action ignores audit.toml; its own ignore input carries the
+          # same list - all GTK3/glib/unic transitive warnings from Tauri's
+          # Linux webview backend (0 real vulnerabilities). See audit.toml.
+          ignore: RUSTSEC-2024-0370,RUSTSEC-2024-0411,RUSTSEC-2024-0412,RUSTSEC-2024-0413,RUSTSEC-2024-0414,RUSTSEC-2024-0415,RUSTSEC-2024-0416,RUSTSEC-2024-0417,RUSTSEC-2024-0418,RUSTSEC-2024-0419,RUSTSEC-2024-0420,RUSTSEC-2024-0429,RUSTSEC-2025-0075,RUSTSEC-2025-0080,RUSTSEC-2025-0081,RUSTSEC-2025-0098,RUSTSEC-2025-0100
 
   npm:
     runs-on: ubuntu-latest
