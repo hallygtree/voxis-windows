@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88" viewBox="0 0 88 88">
+  <!-- menu-bar variant: 12 of the mark's 24 spokes, thicker stroke - the
+       full mark reads as a fuzzy blob at 22pt -->
+  <line x1="44.0" y1="24.0" x2="44.0" y2="16.0" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="54.0" y1="26.7" x2="57.0" y2="21.5" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="61.3" y1="34.0" x2="70.0" y2="29.0" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="64.0" y1="44.0" x2="78.0" y2="44.0" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="61.3" y1="54.0" x2="76.0" y2="62.5" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="54.0" y1="61.3" x2="60.0" y2="71.7" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="44.0" y1="64.0" x2="44.0" y2="79.0" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="34.0" y1="61.3" x2="28.5" y2="70.8" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="26.7" y1="54.0" x2="21.5" y2="57.0" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="24.0" y1="44.0" x2="15.0" y2="44.0" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="26.7" y1="34.0" x2="14.6" y2="27.0" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="34.0" y1="26.7" x2="30.5" y2="20.6" stroke="#e5484d" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="44" cy="44" r="9.0" fill="#e5484d"/>
+</svg>
