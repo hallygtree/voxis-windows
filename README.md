@@ -25,30 +25,39 @@ Each package keeps its own venv, tests and README - see inside.
 
 ## Install
 
-**macOS (Apple Silicon)** - the only fully supported platform today:
+Full steps per component and per OS: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
-1. Engines: clone the repo, create the venvs (`packages/*/README.md`),
-   compile `packages/miris/helper` (`make`).
-2. Tray: `cd apps/tray && npm install && npm run tauri build` - installs from
-   `src-tauri/target/release/bundle/dmg/VOXIS_*.dmg`.
+Quick version (macOS, Apple Silicon):
 
-### Unsigned builds
+```bash
+git clone https://github.com/sammyjdev/voxis.git ~/code/voxis
+# dictation
+cd ~/code/voxis/packages/laris && python3.11 -m venv .venv && \
+  .venv/bin/pip install -r requirements.txt && .venv/bin/python -m laris
+# meetings
+cd ~/code/voxis/packages/miris && python3.11 -m venv .venv && \
+  .venv/bin/pip install -r requirements.txt -r ../laris/requirements.txt && \
+  make -C helper && .venv/bin/miris doctor
+```
 
-Releases are not code-signed or notarized (no paid developer certificates).
-What you will see:
+The tray app installs from the
+[Releases page](https://github.com/sammyjdev/voxis/releases) (unsigned - see
+INSTALL.md for the one-time Gatekeeper/SmartScreen step).
 
-- **macOS**: Gatekeeper blocks the app ("damaged" / "cannot be verified").
-  After dragging VOXIS to Applications, clear the quarantine flag once:
-  `xattr -cr /Applications/VOXIS.app`. On macOS 15+ a right-click > Open is
-  no longer enough.
-- **Windows**: SmartScreen shows "unknown publisher" - "More info" > "Run
-  anyway".
-- **Linux**: `.deb`/AppImage are unaffected.
+**Windows / Linux**: the tray compiles and bundles there, but the engines are
+macOS-only (mlx-whisper + Core Audio), so there is nothing to control yet.
+Tray-side portability is deliberate; engine portability is the open work.
 
-**Windows / Linux**: the tray compiles and bundles (.msi/.deb/AppImage via
-`tauri build`) but has nothing to control there yet - the engines depend on
-mlx-whisper (Apple Silicon) and Core Audio. Tray-side portability is done on
-purpose; engine portability is the open work.
+## Privacy & security
+
+- **Local by default.** Audio, transcripts and notes never leave your machine
+  except through the LLM CLI you configure for meeting summaries (`agy` by
+  default) - that one call is the only outbound path, and you choose the tool.
+- Session recordings and the auth token are written owner-only (`0600`).
+- Dependencies are scanned continuously (cargo-audit + npm audit, see
+  `.github/workflows/security-audit.yml`); 0 known vulnerabilities in the
+  shipped tray.
+- Releases are unsigned - see INSTALL.md.
 
 ## Status
 
