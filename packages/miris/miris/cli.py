@@ -37,8 +37,13 @@ def cmd_start(cfg: config.Config) -> None:
         sys.exit(f"already recording: {session.name} (pid {pid})")
     session = cfg.sessions_dir / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     session.mkdir(parents=True)
-    subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session)],
-                     start_new_session=True)
+    # own stdio for the recorder: inheriting the CLI's pipes would keep them
+    # open for the whole recording, deadlocking any caller that reads them
+    # (the VOXIS tray collects this CLI's output)
+    with (session / "recorder.log").open("ab") as log:
+        subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session)],
+                         start_new_session=True, stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log)
     for _ in range(50):
         if (session / "recorder.pid").exists():
             print(f"recording -> {session}")

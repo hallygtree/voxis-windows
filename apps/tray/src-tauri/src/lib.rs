@@ -160,9 +160,14 @@ fn handle_menu(app: &AppHandle, id: &str) {
         }
         "settings" => commands::show_settings_window(app),
         "miris_start" => {
-            if let Err(e) = miris::start(&state.config.miris_bin) {
-                notify(app, &format!("Falha ao iniciar gravação: {e}"));
-            }
+            // off the menu thread: the miris CLI takes seconds just to import
+            let app2 = app.clone();
+            let bin = state.config.miris_bin.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = miris::start(&bin) {
+                    notify(&app2, &format!("Falha ao iniciar gravação: {e}"));
+                }
+            });
         }
         "miris_stop" => {
             // the menu item only disables on the next poll tick - a double
