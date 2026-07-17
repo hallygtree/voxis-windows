@@ -1,9 +1,261 @@
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
-
 mod laris;
 mod miris;
 mod settings;
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
+
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::{AppHandle, Manager, Wry};
+use tauri_plugin_notification::NotificationExt;
+
+const ARCHETYPES: [&str; 3] = ["waveform", "reactor", "faceted"];
+const PALETTES: [&str; 4] = ["blade", "noir", "acid", "ember"];
+const POSITIONS: [&str; 6] = [
+    "center", "top-left", "top-center", "top-right", "bottom-left", "bottom-right",
+];
+
+pub struct AppState {
+    pub config: settings::TrayConfig,
+    pub daemon: Mutex<laris::LarisDaemon>,
+    pub processing: AtomicBool,
+    /// Set on every menu click: native check items auto-toggle visually even
+    /// when the action fails, so the next poll tick must rebuild regardless
+    /// of whether the snapshot changed.
+    pub menu_dirty: AtomicBool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct Snapshot {
+    recording: Option<(String, i64)>, // (session id, minutes)
+    processing: bool,
+    laris_alive: bool,
+    hands_free: bool,
+    has_last_note: bool,
+    theme: Option<(String, String, String)>, // (archetype, palette, position)
+}
+
+fn peers_path() -> PathBuf {
+    settings::config_dir().join("peers.json")
+}
+
+fn sessions_dir(state: &AppState) -> PathBuf {
+    PathBuf::from(&state.config.miris_home).join("sessions")
+}
+
+fn take_snapshot(state: &AppState) -> Snapshot {
+    let sessions = sessions_dir(state);
+    let recording = match miris::status(&sessions) {
+        miris::MirisStatus::Recording { session, .. } => {
+            let mins = miris::recording_minutes(&session, chrono::Local::now()).unwrap_or(0);
+            Some((session, mins))
+        }
+        miris::MirisStatus::Idle => None,
+    };
+    let peer = laris::read_peer(&peers_path());
+    let laris_alive = peer.as_ref().map(|p| laris::alive(&p.url)).unwrap_or(false);
+    // ponytail: theme fetched every tick while laris is up - localhost HTTP,
+    // negligible; cache only if it ever shows up in a profile
+    let theme = peer
+        .filter(|_| laris_alive)
+        .and_then(|p| laris::get_theme(&p).ok())
+        .and_then(|body| {
+            let t = body.get("theme")?;
+            Some((
+                t.get("archetype")?.as_str()?.to_owned(),
+                t.get("palette")?.as_str()?.to_owned(),
+                t.get("position")?.as_str()?.to_owned(),
+            ))
+        });
+    let laris_settings = settings::read_json_map(&settings::laris_settings_path());
+    let hands_free =
+        laris_settings.get("ASSISTANT_MODE").and_then(|v| v.as_str()) == Some("always_on");
+    Snapshot {
+        recording,
+        processing: state.processing.load(Ordering::SeqCst),
+        laris_alive,
+        hands_free,
+        has_last_note: miris::last_note(&sessions).is_some(),
+        theme,
+    }
+}
+
+fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
+    let meeting = if snap.processing {
+        MenuItem::with_id(app, "noop", "Processando reunião...", false, None::<&str>)?
+    } else if let Some((_, mins)) = &snap.recording {
+        MenuItem::with_id(app, "miris_stop", format!("Parar gravação ({mins} min)"), true, None::<&str>)?
+    } else {
+        MenuItem::with_id(app, "miris_start", "Gravar reunião", true, None::<&str>)?
+    };
+    let last_note =
+        MenuItem::with_id(app, "last_note", "Última nota", snap.has_last_note, None::<&str>)?;
+    let dictation =
+        CheckMenuItem::with_id(app, "dictation", "Ditado", true, snap.laris_alive, None::<&str>)?;
+    let hands_free = CheckMenuItem::with_id(
+        app, "hands_free", "Hands-free", snap.laris_alive, snap.hands_free, None::<&str>,
+    )?;
+
+    let (cur_arch, cur_pal, cur_pos) = snap.theme.clone().unwrap_or_default();
+    let mut theme_children: Vec<Box<dyn IsMenuItem<Wry>>> = Vec::new();
+    for a in ARCHETYPES {
+        theme_children.push(Box::new(CheckMenuItem::with_id(
+            app, format!("theme:archetype:{a}"), a, true, a == cur_arch, None::<&str>,
+        )?));
+    }
+    theme_children.push(Box::new(PredefinedMenuItem::separator(app)?));
+    for p in PALETTES {
+        theme_children.push(Box::new(CheckMenuItem::with_id(
+            app, format!("theme:palette:{p}"), p, true, p == cur_pal, None::<&str>,
+        )?));
+    }
+    theme_children.push(Box::new(PredefinedMenuItem::separator(app)?));
+    for p in POSITIONS {
+        theme_children.push(Box::new(CheckMenuItem::with_id(
+            app, format!("theme:position:{p}"), p, true, p == cur_pos, None::<&str>,
+        )?));
+    }
+    let refs: Vec<&dyn IsMenuItem<Wry>> = theme_children.iter().map(|b| b.as_ref()).collect();
+    let theme_menu =
+        Submenu::with_id_and_items(app, "theme", "Tema do orb", snap.laris_alive, &refs)?;
+
+    let settings_item =
+        MenuItem::with_id(app, "settings", "Configurações...", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(app, &[
+        &meeting, &last_note, &sep1, &dictation, &hands_free, &theme_menu, &sep2,
+        &settings_item, &quit,
+    ])
+}
+
+fn set_tray_icon(tray: &TrayIcon, recording: bool) {
+    let (bytes, template): (&[u8], bool) = if recording {
+        (include_bytes!("../icons/tray-rec.png"), false)
+    } else {
+        (include_bytes!("../icons/tray-idle.png"), true)
+    };
+    if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+        let _ = tray.set_icon_as_template(template);
+        let _ = tray.set_icon(Some(img));
+    }
+}
+
+fn notify(app: &AppHandle, body: &str) {
+    let _ = app.notification().builder().title("VOXIS").body(body).show();
+}
+
+fn handle_menu(app: &AppHandle, id: &str) {
+    let state = app.state::<AppState>();
+    state.menu_dirty.store(true, Ordering::SeqCst);
+    match id {
+        "quit" => {
+            state.daemon.lock().unwrap().stop();
+            app.exit(0);
+        }
+        "settings" => show_settings_placeholder(app),
+        "miris_start" => {
+            if let Err(e) = miris::start(&state.config.miris_bin) {
+                notify(app, &format!("Falha ao iniciar gravação: {e}"));
+            }
+        }
+        "miris_stop" => {
+            // the menu item only disables on the next poll tick - a double
+            // click must not launch two concurrent `miris stop` pipelines
+            if state
+                .processing
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            let app2 = app.clone();
+            let bin = state.config.miris_bin.clone();
+            std::thread::spawn(move || {
+                let msg = match miris::stop(&bin) {
+                    Ok(note) => format!(
+                        "Nota salva: {}",
+                        note.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                    ),
+                    Err(e) => format!("Falha ao processar reunião: {e}"),
+                };
+                app2.state::<AppState>().processing.store(false, Ordering::SeqCst);
+                notify(&app2, &msg);
+            });
+        }
+        "last_note" => {
+            if let Some(note) = miris::last_note(&sessions_dir(&state)) {
+                let _ = tauri_plugin_opener::open_path(note, None::<&str>);
+            }
+        }
+        "dictation" => {
+            // off the menu thread: stop() blocks up to 3s and alive() up to
+            // 300ms - holding the daemon mutex here would freeze the tray
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                let state = app2.state::<AppState>();
+                let mut daemon = state.daemon.lock().unwrap();
+                if daemon.owns_running() {
+                    daemon.stop();
+                } else {
+                    let external = laris::read_peer(&peers_path())
+                        .map(|p| laris::alive(&p.url))
+                        .unwrap_or(false);
+                    if external {
+                        // the tray never kills a daemon it didn't start
+                        notify(&app2, "Ditado foi iniciado fora do VOXIS - encerre-o por lá");
+                    } else if let Err(e) = daemon.spawn() {
+                        notify(&app2, &format!("Falha ao iniciar ditado: {e}"));
+                    }
+                }
+            });
+        }
+        "hands_free" => {
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                let path = settings::laris_settings_path();
+                let mut map = settings::read_json_map(&path);
+                let now_on =
+                    map.get("ASSISTANT_MODE").and_then(|v| v.as_str()) == Some("always_on");
+                let next = if now_on { "ptt" } else { "always_on" };
+                map.insert("ASSISTANT_MODE".into(), serde_json::Value::String(next.into()));
+                if let Err(e) = settings::write_json_atomic(&path, &serde_json::Value::Object(map)) {
+                    notify(&app2, &format!("Falha ao salvar: {e}"));
+                    return;
+                }
+                // settings load at daemon start only - restart our own daemon to apply
+                let state = app2.state::<AppState>();
+                let mut daemon = state.daemon.lock().unwrap();
+                if daemon.owns_running() {
+                    daemon.stop();
+                    if let Err(e) = daemon.spawn() {
+                        notify(&app2, &format!("Falha ao reiniciar ditado: {e}"));
+                    }
+                }
+            });
+        }
+        id if id.starts_with("theme:") => {
+            let parts: Vec<&str> = id.splitn(3, ':').collect();
+            if let [_, key, value] = parts[..] {
+                if let Some(peer) = laris::read_peer(&peers_path()) {
+                    if let Err(e) = laris::set_theme(&peer, serde_json::json!({ key: value })) {
+                        notify(app, &format!("Falha ao aplicar tema: {e}"));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// Task 7 replaces this with commands::show_settings_window
+fn show_settings_placeholder(app: &AppHandle) {
+    notify(app, "Configurações chegam na próxima tarefa");
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,20 +266,56 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit])?;
+            let config = settings::load_tray_config();
+            let daemon = laris::LarisDaemon::new(PathBuf::from(&config.laris_dir));
+            app.manage(AppState {
+                config,
+                daemon: Mutex::new(daemon),
+                processing: AtomicBool::new(false),
+                menu_dirty: AtomicBool::new(false),
+            });
+
+            let snap = take_snapshot(&app.state::<AppState>());
+            let menu = build_menu(app.handle(), &snap)?;
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?;
-            TrayIconBuilder::with_id("voxis")
+            let tray = TrayIconBuilder::with_id("voxis")
                 .icon(icon)
                 .icon_as_template(true)
                 .menu(&menu)
                 .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| {
-                    if event.id().as_ref() == "quit" {
-                        app.exit(0);
-                    }
-                })
+                .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))
                 .build(app)?;
+            set_tray_icon(&tray, snap.recording.is_some());
+
+            // poll loop: snapshot off the main thread, menu mutations on it
+            // (macOS requires menu construction on the main thread)
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut last = snap;
+                loop {
+                    std::thread::sleep(Duration::from_secs(2));
+                    let state = handle.state::<AppState>();
+                    let dirty = state.menu_dirty.swap(false, Ordering::SeqCst);
+                    let current = take_snapshot(&state);
+                    if current == last && !dirty {
+                        continue;
+                    }
+                    let recording_changed =
+                        current.recording.is_some() != last.recording.is_some();
+                    last = current.clone();
+                    let handle2 = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if let Some(tray) = handle2.tray_by_id("voxis") {
+                            if let Ok(menu) = build_menu(&handle2, &current) {
+                                let _ = tray.set_menu(Some(menu));
+                            }
+                            if recording_changed {
+                                set_tray_icon(&tray, current.recording.is_some());
+                            }
+                        }
+                    });
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
