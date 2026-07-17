@@ -15,6 +15,9 @@ def test_type_text_pastes_text_and_restores_clipboard(monkeypatch):
     monkeypatch.setattr("laris.dictation.subprocess.run", fake_run)
     monkeypatch.setattr("laris.dictation.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("laris.dictation._paste_via_keyboard", lambda: calls.append("PASTE"))
+    # format_for_focus reads the REAL frontmost app - without this pin the
+    # test's outcome depends on which window the developer has focused
+    monkeypatch.setattr("laris.app_context.format_for_focus", lambda text: text)
 
     type_text("olá mundo")
 
