@@ -2,6 +2,7 @@ sounddevice>=0.4.6
 pynput>=1.8.2
 pyobjc-framework-ApplicationServices>=10.0
 pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-WebKit>=10.0
 torch>=2.2.0
 silero-vad>=5.1
 deepfilternet>=0.4.3

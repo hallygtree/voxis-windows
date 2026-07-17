@@ -15,8 +15,9 @@ import os
 import sys
 import threading
 
-_SIZE = 140.0
-_BOTTOM_MARGIN = 16.0
+_SIZE = 120.0
+_TOP_MARGIN = 40.0
+_LEFT_MARGIN = 16.0
 
 
 def main() -> None:
@@ -32,8 +33,11 @@ def main() -> None:
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
 
     screen = AppKit.NSScreen.mainScreen().frame()
+    # top-left corner: x from left margin, y from top (macOS origin = bottom-left)
     rect = AppKit.NSMakeRect(
-        screen.size.width / 2 - _SIZE / 2, _BOTTOM_MARGIN, _SIZE, _SIZE
+        _LEFT_MARGIN,
+        screen.size.height - _SIZE - _TOP_MARGIN,
+        _SIZE, _SIZE
     )
 
     panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -65,6 +69,14 @@ def main() -> None:
     try:
         web.setUnderPageBackgroundColor_(AppKit.NSColor.clearColor())
     except Exception:  # noqa: BLE001 - older macOS without the setter
+        pass
+    try:
+        web.setBackgroundColor_(AppKit.NSColor.clearColor())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        web.setOpaque_(False)
+    except Exception:  # noqa: BLE001
         pass
     panel.setContentView_(web)
 
