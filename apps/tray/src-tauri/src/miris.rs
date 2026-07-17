@@ -130,6 +130,7 @@ mod tests {
         assert_eq!(status(tmp.path()), MirisStatus::Idle);
     }
 
+    #[cfg(unix)] // pid_alive is a no-op off unix (engines are macOS-only)
     #[test]
     fn status_recording_with_live_pid() {
         let tmp = tempfile::tempdir().unwrap();
@@ -161,6 +162,7 @@ mod tests {
         assert_eq!(status(tmp.path()), MirisStatus::Idle);
     }
 
+    #[cfg(unix)] // pid_alive is a no-op off unix (engines are macOS-only)
     #[test]
     fn status_newest_live_session_wins() {
         let tmp = tempfile::tempdir().unwrap();
