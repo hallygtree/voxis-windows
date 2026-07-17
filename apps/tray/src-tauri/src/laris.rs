@@ -1,0 +1,198 @@
+//! LARIS integration: peer discovery, liveness probe, theme API, and the
+//! lifecycle of a tray-spawned dictation daemon. An externally started
+//! daemon is detected via alive() but never killed by the tray.
+
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LarisPeer {
+    pub url: String,
+    pub token: String,
+}
+
+/// peers.json is written by the laris daemon on boot: {"laris": {url, token}}.
+pub fn read_peer(path: &Path) -> Option<LarisPeer> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let laris = json.get("laris")?;
+    Some(LarisPeer {
+        url: laris.get("url")?.as_str()?.to_owned(),
+        token: laris.get("token")?.as_str()?.to_owned(),
+    })
+}
+
+/// TCP probe on the overlay port - cheap enough for the 2s poll tick.
+pub fn alive(url: &str) -> bool {
+    url.strip_prefix("http://")
+        .and_then(|a| a.trim_end_matches('/').parse::<std::net::SocketAddr>().ok())
+        .map(|addr| {
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+        })
+        .unwrap_or(false)
+}
+
+/// Loopback-only HTTP agent: hard 2s timeout so a wedged daemon can never
+/// freeze a menu handler, and no env proxy (HTTP_PROXY would route the
+/// token-bearing loopback call off-box).
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(2)))
+        .proxy(None)
+        .build()
+        .new_agent()
+}
+
+pub fn get_theme(peer: &LarisPeer) -> Result<serde_json::Value, String> {
+    let mut res = agent()
+        .get(format!("{}/theme?token={}", peer.url, peer.token))
+        .call()
+        .map_err(|e| e.to_string())?;
+    res.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+pub fn set_theme(
+    peer: &LarisPeer,
+    updates: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let mut res = agent()
+        .post(format!("{}/theme?token={}", peer.url, peer.token))
+        .send_json(&updates)
+        .map_err(|e| e.to_string())?;
+    res.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+pub struct LarisDaemon {
+    child: Option<Child>,
+    laris_dir: PathBuf,
+}
+
+impl LarisDaemon {
+    pub fn new(laris_dir: PathBuf) -> Self {
+        Self {
+            child: None,
+            laris_dir,
+        }
+    }
+
+    pub fn owns_running(&mut self) -> bool {
+        match self.child.as_mut().map(|c| c.try_wait()) {
+            Some(Ok(None)) => true,
+            _ => {
+                self.child = None;
+                false
+            }
+        }
+    }
+
+    pub fn spawn(&mut self) -> Result<(), String> {
+        if self.owns_running() {
+            return Ok(()); // don't orphan a live child by overwriting its handle
+        }
+        let python = self.laris_dir.join(".venv/bin/python");
+        let child = Command::new(&python)
+            .args(["-m", "laris"])
+            .current_dir(&self.laris_dir)
+            .spawn()
+            .map_err(|e| format!("{}: {e}", python.display()))?;
+        self.child = Some(child);
+        Ok(())
+    }
+
+    /// SIGTERM first (laris tears down overlay + keyboard listener), SIGKILL
+    /// after 3s if it hangs.
+    pub fn stop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGTERM);
+        }
+        for _ in 0..30 {
+            if let Ok(Some(_)) = child.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn read_peer_happy_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("peers.json");
+        fs::write(
+            &p,
+            r#"{"laris": {"url": "http://127.0.0.1:8421", "token": "abc"}}"#,
+        )
+        .unwrap();
+        let peer = read_peer(&p).unwrap();
+        assert_eq!(peer.url, "http://127.0.0.1:8421");
+        assert_eq!(peer.token, "abc");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_spawn_owns_stop_lifecycle() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join(".venv/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let py = bin_dir.join("python");
+        fs::write(&py, "#!/bin/sh\nsleep 60\n").unwrap();
+        fs::set_permissions(&py, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut daemon = LarisDaemon::new(tmp.path().to_path_buf());
+        assert!(!daemon.owns_running());
+        daemon.spawn().unwrap();
+        assert!(daemon.owns_running());
+        daemon.spawn().unwrap(); // idempotent - must not orphan the first child
+        daemon.stop();
+        assert!(!daemon.owns_running());
+
+        let mut missing = LarisDaemon::new(tmp.path().join("nope"));
+        assert!(missing.spawn().is_err());
+    }
+
+    #[test]
+    fn read_peer_missing_or_corrupt_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_peer(&tmp.path().join("nope.json")).is_none());
+        let p = tmp.path().join("bad.json");
+        fs::write(&p, "{oops").unwrap();
+        assert!(read_peer(&p).is_none());
+        fs::write(&p, r#"{"laris": {"url": 1}}"#).unwrap();
+        assert!(read_peer(&p).is_none());
+    }
+
+    #[test]
+    fn alive_true_for_bound_listener_false_otherwise() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(alive(&format!("http://127.0.0.1:{port}")));
+        drop(listener);
+        // macOS may briefly accept into the dead listener's backlog - poll
+        // until the close propagates instead of racing a single probe
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut down = false;
+        while std::time::Instant::now() < deadline {
+            if !alive(&format!("http://127.0.0.1:{port}")) {
+                down = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(down, "port still accepting 2s after listener drop");
+        assert!(!alive("not-a-url"));
+    }
+}
