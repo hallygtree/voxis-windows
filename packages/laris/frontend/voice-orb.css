@@ -1,0 +1,67 @@
+/* Voice-reactive widget - adapted from the approved mockup
+   docs/superpowers/specs/mockups/voice-orb-v9-final.html. Fixed in the
+   corner when idle, expands over the dashboard when active (JARVIS-style).
+   The scanline sweep is scoped to the widget's own bounds here (the
+   mockup swept its whole demo-stage preview box, which doesn't exist
+   in the real dashboard). */
+
+#orb-canvas-wrap {
+  position: fixed; bottom: 16px; right: 16px;
+  width: 120px; height: 120px;
+  transition: all .8s cubic-bezier(.2,.8,.2,1);
+  z-index: 50;
+}
+#orb-canvas-wrap.active {
+  width: 400px; height: 400px; bottom: 50%; right: 50%; transform: translate(50%,50%);
+}
+#orb-canvas-wrap canvas { width:100% !important; height:100% !important; display:block; }
+
+#orb-canvas-wrap .scanline-sweep {
+  position:absolute; left:0; right:0; height:60px; z-index:6; pointer-events:none;
+  background: linear-gradient(180deg, transparent, rgba(90,220,225,.06), transparent);
+  animation: orb-sweep 4.5s linear infinite;
+  opacity: 0;
+  transition: opacity .5s .3s;
+}
+#orb-canvas-wrap.active .scanline-sweep { opacity: 1; }
+@keyframes orb-sweep { 0%{ top:-60px } 100%{ top:100% } }
+
+.hud-frame { position:absolute; inset:-16px; pointer-events:none; opacity:0; transition:opacity .5s .3s; }
+#orb-canvas-wrap.active .hud-frame { opacity:.9; }
+.hud-frame::before, .hud-frame::after, .hud-frame .c2::before, .hud-frame .c2::after {
+  content:''; position:absolute; width:18px; height:18px; border:1px solid #5adce1;
+}
+.hud-frame::before { top:0; left:0; border-right:none; border-bottom:none; }
+.hud-frame::after { top:0; right:0; border-left:none; border-bottom:none; }
+.hud-frame .c2::before { bottom:0; left:0; border-right:none; border-top:none; }
+.hud-frame .c2::after { bottom:0; right:0; border-left:none; border-top:none; }
+
+.reticle { position:absolute; border-radius:50%; pointer-events:none; opacity:0; transition:opacity .5s .3s; }
+#orb-canvas-wrap.active .reticle { opacity:1; }
+.ret-1 { inset:-26px; border:1px solid #5adce144; animation: ret-spin 20s linear infinite; }
+.ret-2 { inset:-42px; border:1px dashed #d95a9e55; animation: ret-spin 14s linear infinite reverse; }
+.ret-3 { inset:-58px; border:1px solid #5adce122; animation: ret-spin 30s linear infinite; }
+.ret-ticks { inset:-42px; animation: ret-spin 14s linear infinite reverse; }
+.ret-ticks::before, .ret-ticks::after {
+  content:''; position:absolute; background:#d95a9e; opacity:.6;
+}
+.ret-ticks::before { top:-1px; left:50%; width:1px; height:6px; transform:translateX(-50%); }
+.ret-ticks::after { bottom:-1px; left:50%; width:1px; height:6px; transform:translateX(-50%); }
+@keyframes ret-spin { to { transform: rotate(360deg); } }
+
+.amp-readout {
+  position:absolute; bottom:-40px; left:50%; transform:translateX(-50%); width:140px;
+  display:flex; align-items:center; gap:6px; opacity:0; transition:opacity .5s .4s; z-index:2;
+}
+#orb-canvas-wrap.active .amp-readout { opacity:.85; }
+.amp-readout .lbl { font-size:8px; color:#5adce1; letter-spacing:.1em; }
+.amp-readout .track { flex:1; height:4px; background:#181420; border-radius:2px; overflow:hidden; }
+.amp-readout .fill { height:100%; background:linear-gradient(90deg,#5adce1,#d95a9e); width:0%; transition:width .1s linear; }
+
+.phase-caption {
+  position:fixed; bottom:150px; right:16px;
+  font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#5adce1;
+  text-shadow:0 0 8px #5adce1aa; opacity:0; transition:opacity .3s; z-index:51;
+  background:#0a0912cc; padding:6px 16px; border:1px solid #2c2233; border-radius:3px;
+}
+.phase-caption.show { opacity:1; }
