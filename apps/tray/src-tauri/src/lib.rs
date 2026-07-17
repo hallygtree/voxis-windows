@@ -1,3 +1,4 @@
+mod commands;
 mod laris;
 mod miris;
 mod settings;
@@ -157,7 +158,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
             state.daemon.lock().unwrap().stop();
             app.exit(0);
         }
-        "settings" => show_settings_placeholder(app),
+        "settings" => commands::show_settings_window(app),
         "miris_start" => {
             if let Err(e) = miris::start(&state.config.miris_bin) {
                 notify(app, &format!("Falha ao iniciar gravação: {e}"));
@@ -252,16 +253,17 @@ fn handle_menu(app: &AppHandle, id: &str) {
     }
 }
 
-// Task 7 replaces this with commands::show_settings_window
-fn show_settings_placeholder(app: &AppHandle) {
-    notify(app, "Configurações chegam na próxima tarefa");
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::get_settings,
+            commands::save_laris_settings,
+            commands::save_miris_config,
+            commands::save_theme,
+        ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
