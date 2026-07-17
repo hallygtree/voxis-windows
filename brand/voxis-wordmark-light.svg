@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="150" viewBox="0 0 560 150">
+  <g font-family="-apple-system, 'SF Pro Display', 'Segoe UI', sans-serif" font-size="96" font-weight="750" fill="#10181f">
+    <text x="30" y="109">V</text>
+    <text x="230" y="109">X</text>
+    <text x="320" y="109">I</text>
+    <text x="370" y="109">S</text>
+  </g>
+  <line x1="160.0" y1="52.0" x2="160.0" y2="42.8" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="166.0" y1="52.8" x2="169.8" y2="38.3" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="171.5" y1="55.1" x2="174.9" y2="49.1" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="176.3" y1="58.7" x2="189.3" y2="45.7" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="179.9" y1="63.5" x2="189.9" y2="57.8" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="182.2" y1="69.0" x2="187.8" y2="67.6" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="183.0" y1="75.0" x2="199.1" y2="75.0" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="182.2" y1="81.0" x2="192.2" y2="83.6" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="179.9" y1="86.5" x2="196.8" y2="96.3" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="176.3" y1="91.3" x2="182.0" y2="97.0" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="171.5" y1="94.9" x2="178.4" y2="106.9" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="166.0" y1="97.2" x2="167.7" y2="103.9" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="160.0" y1="98.0" x2="160.0" y2="115.2" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="154.0" y1="97.2" x2="151.7" y2="106.1" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="148.5" y1="94.9" x2="142.2" y2="105.9" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="143.7" y1="91.3" x2="130.7" y2="104.3" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="140.1" y1="86.5" x2="134.1" y2="90.0" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="137.8" y1="81.0" x2="123.3" y2="84.8" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="137.0" y1="75.0" x2="126.7" y2="75.0" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="137.8" y1="69.0" x2="132.2" y2="67.6" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="140.1" y1="63.5" x2="126.1" y2="55.5" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="143.7" y1="58.7" x2="135.6" y2="50.6" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="148.5" y1="55.1" x2="144.5" y2="48.1" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="154.0" y1="52.8" x2="150.5" y2="39.5" stroke="#2a97a4" stroke-width="3.4" stroke-linecap="round"/>
+  <circle cx="160" cy="75" r="6.9" fill="#2a97a4"/>
+</svg>
