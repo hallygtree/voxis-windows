@@ -50,6 +50,24 @@ jobs:
         working-directory: apps/tray/src-tauri
         run: cargo test
 
+      - name: Set up Python (Windows engine)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
+        with:
+          python-version: "3.11"
+
+      - name: Build frozen laris engine (Windows)
+        if: matrix.platform == 'windows-latest'
+        working-directory: packages/laris
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-windows.txt pyinstaller
+          pyinstaller packaging/laris.spec --noconfirm
+          # stage the onedir output where tauri.windows.conf.json expects it
+          New-Item -ItemType Directory -Force -Path ../../apps/tray/src-tauri/engine | Out-Null
+          Copy-Item -Recurse -Force dist/laris-engine/* ../../apps/tray/src-tauri/engine/
+        shell: pwsh
+
       # On tag pushes this drafts a GitHub release with the installers
       # (.dmg / .msi / .deb / .AppImage); on manual dispatch it only builds.
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
@@ -57,6 +75,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/tray
+          args: ${{ matrix.platform == 'windows-latest' && '--config src-tauri/tauri.windows.conf.json' || '' }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('VOXIS {0}', github.ref_name) || '' }}
           releaseDraft: true
