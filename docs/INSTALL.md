@@ -1,15 +1,17 @@
 # Installing VOXIS
 
-VOXIS has two parts that install separately:
+VOXIS installs differently per platform:
 
-- **Engines** (`packages/laris`, `packages/miris`) - the Python programs that
-  do dictation and meeting recording. **macOS on Apple Silicon only** today
-  (they depend on `mlx-whisper` and Core Audio).
-- **Tray** (`apps/tray`) - the menu-bar control app. Cross-platform, but with
-  the engines being macOS-only it is only useful on macOS right now.
+- **macOS (Apple Silicon)** - dictation (`laris`) and meeting recording
+  (`miris`) install from source into Python venvs; they use `mlx-whisper` and
+  Core Audio. The **tray** (`apps/tray`) is optional sugar on top.
+- **Windows** - **dictation only** (meetings are a later phase). One installer
+  ships the tray plus a self-contained dictation engine (frozen with
+  PyInstaller, no system Python). Download it, hold a key, dictate. See
+  [Windows: dictation](#windows-dictation) below.
 
-If you just want dictation or meeting notes, install the engines. The tray is
-optional sugar on top.
+If you just want dictation or meeting notes on macOS, install the engines. On
+Windows, install the tray - the engine rides inside it.
 
 ---
 
@@ -121,6 +123,36 @@ CLI, the LARIS overlay server, config files). It reads the absolute paths of
 the engines from `~/.config/voice-at/tray.json`; the defaults assume
 `~/code/voxis` and `~/.local/bin/miris`, so adjust that file if you cloned
 elsewhere.
+
+---
+
+## Windows: dictation
+
+Windows gets dictation through a single installer - no Python, no venv, no
+source clone.
+
+1. **Install.** Download `VOXIS_<version>_x64-setup.exe` (or `.msi`) from the
+   [Releases page](https://github.com/sammyjdev/voxis/releases) and run it.
+   SmartScreen will warn (unsigned) - "More info" > "Run anyway".
+2. **Grant the microphone.** Windows has no accessibility prompt like macOS;
+   enable it under **Settings > Privacy & security > Microphone** (allow
+   desktop apps).
+3. **Dictate.** Hold the activation key (**Right-Shift** by default), speak,
+   release - the text lands in the focused app. Change the key in the tray
+   settings window.
+
+**First run downloads the speech model.** The Whisper model (`small`, a few
+hundred MB) is fetched from HuggingFace the first time you dictate, so the
+first use needs internet and takes a moment. After that it runs fully offline.
+
+**CPU vs CUDA.** The bundled engine runs on **CPU** (int8) on any machine - the
+guaranteed baseline. An NVIDIA GPU is **not** used automatically in this build;
+CUDA acceleration is a manual upgrade (install the CUDA CTranslate2 runtime),
+not required and not bundled.
+
+**If something breaks.** The engine is windowed (no console), so it logs to
+`%USERPROFILE%\.config\voice-at\laris-engine.log`. Send that file when
+reporting a problem - it holds the startup output and any crash traceback.
 
 ---
 
