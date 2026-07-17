@@ -15,9 +15,15 @@ import os
 import sys
 import threading
 
-_SIZE = 120.0
-_TOP_MARGIN = 40.0
-_LEFT_MARGIN = 16.0
+from laris import orb_theme
+
+
+def panel_rect_for_theme(theme: dict, screen_w: float,
+                         screen_h: float) -> tuple[float, float, float, float]:
+    """(x, y, w, h) for the overlay panel - pure, testable."""
+    x, y = orb_theme.position_rect(theme, screen_w, screen_h)
+    size = float(theme["size"])
+    return x, y, size, size
 
 
 def main() -> None:
@@ -32,13 +38,10 @@ def main() -> None:
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
 
+    theme = orb_theme.load_theme()
     screen = AppKit.NSScreen.mainScreen().frame()
-    # top-left corner: x from left margin, y from top (macOS origin = bottom-left)
-    rect = AppKit.NSMakeRect(
-        _LEFT_MARGIN,
-        screen.size.height - _SIZE - _TOP_MARGIN,
-        _SIZE, _SIZE
-    )
+    x, y, w, h = panel_rect_for_theme(theme, screen.size.width, screen.size.height)
+    rect = AppKit.NSMakeRect(x, y, w, h)
 
     panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
         rect,
@@ -58,7 +61,7 @@ def main() -> None:
 
     config = WebKit.WKWebViewConfiguration.alloc().init()
     web = WebKit.WKWebView.alloc().initWithFrame_configuration_(
-        AppKit.NSMakeRect(0, 0, _SIZE, _SIZE), config
+        AppKit.NSMakeRect(0, 0, w, h), config
     )
     try:
         # KVC switch WebKit ships but doesn't expose as API; without it the
@@ -88,6 +91,30 @@ def main() -> None:
         15.0,
     )
     web.loadRequest_(request)
+
+    theme_path = orb_theme.theme_path()
+    try:
+        state = {"mtime": theme_path.stat().st_mtime}
+    except OSError:
+        state = {"mtime": 0.0}
+
+    def _poll_theme() -> None:
+        try:
+            mtime = theme_path.stat().st_mtime
+        except OSError:
+            return
+        if mtime == state["mtime"]:
+            return
+        state["mtime"] = mtime
+        new_theme = orb_theme.load_theme()
+        nx, ny, nw, nh = panel_rect_for_theme(
+            new_theme, screen.size.width, screen.size.height)
+        panel.setFrame_display_(AppKit.NSMakeRect(nx, ny, nw, nh), True)
+        web.setFrame_(AppKit.NSMakeRect(0, 0, nw, nh))
+
+    AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+        2.0, True, lambda _timer: _poll_theme()
+    )
 
     def apply(command: str) -> None:
         if command.startswith("show"):
