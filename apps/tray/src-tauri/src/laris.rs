@@ -66,6 +66,7 @@ pub fn set_theme(
 pub struct LarisDaemon {
     child: Option<Child>,
     laris_dir: PathBuf,
+    engine_bin: Option<PathBuf>, // frozen engine (Windows); None = dev venv python
 }
 
 impl LarisDaemon {
@@ -73,6 +74,16 @@ impl LarisDaemon {
         Self {
             child: None,
             laris_dir,
+            engine_bin: None,
+        }
+    }
+
+    /// Run a self-contained frozen engine binary (Windows packaged build).
+    pub fn with_engine(engine_bin: PathBuf) -> Self {
+        Self {
+            child: None,
+            laris_dir: engine_bin.parent().map(Path::to_path_buf).unwrap_or_default(),
+            engine_bin: Some(engine_bin),
         }
     }
 
@@ -90,12 +101,20 @@ impl LarisDaemon {
         if self.owns_running() {
             return Ok(()); // don't orphan a live child by overwriting its handle
         }
-        let python = self.laris_dir.join(".venv/bin/python");
-        let child = Command::new(&python)
-            .args(["-m", "laris"])
-            .current_dir(&self.laris_dir)
-            .spawn()
-            .map_err(|e| format!("{}: {e}", python.display()))?;
+        let child = match &self.engine_bin {
+            Some(bin) => Command::new(bin)
+                .current_dir(&self.laris_dir)
+                .spawn()
+                .map_err(|e| format!("{}: {e}", bin.display()))?,
+            None => {
+                let python = self.laris_dir.join(".venv/bin/python");
+                Command::new(&python)
+                    .args(["-m", "laris"])
+                    .current_dir(&self.laris_dir)
+                    .spawn()
+                    .map_err(|e| format!("{}: {e}", python.display()))?
+            }
+        };
         self.child = Some(child);
         Ok(())
     }
@@ -162,6 +181,27 @@ mod tests {
 
         let mut missing = LarisDaemon::new(tmp.path().join("nope"));
         assert!(missing.spawn().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_spawns_explicit_engine_binary() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = tmp.path().join("laris-engine");
+        fs::write(&engine, "#!/bin/sh\nsleep 60\n").unwrap();
+        fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // when given an explicit engine binary, the daemon runs it directly
+        // instead of `.venv/bin/python -m laris`
+        let mut daemon = LarisDaemon::with_engine(engine);
+        assert!(!daemon.owns_running());
+        daemon.spawn().unwrap();
+        assert!(daemon.owns_running());
+        daemon.stop();
+        assert!(!daemon.owns_running());
     }
 
     #[test]

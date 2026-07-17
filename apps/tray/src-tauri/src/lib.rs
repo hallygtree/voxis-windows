@@ -283,7 +283,25 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let config = settings::load_tray_config();
-            let daemon = laris::LarisDaemon::new(PathBuf::from(&config.laris_dir));
+            let daemon = {
+                #[cfg(windows)]
+                {
+                    let engine = app
+                        .path()
+                        .resource_dir()
+                        .ok()
+                        .map(|r| r.join("engine").join("laris-engine.exe"))
+                        .filter(|p| p.exists());
+                    match engine {
+                        Some(bin) => laris::LarisDaemon::with_engine(bin),
+                        None => laris::LarisDaemon::new(PathBuf::from(&config.laris_dir)),
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    laris::LarisDaemon::new(PathBuf::from(&config.laris_dir))
+                }
+            };
             app.manage(AppState {
                 config,
                 daemon: Mutex::new(daemon),
