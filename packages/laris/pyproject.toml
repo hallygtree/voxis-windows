@@ -10,3 +10,6 @@ requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 include = ["laris*"]
+
+[tool.pytest.ini_options]
+markers = ["slow: real-model tests that download weights and run inference"]
