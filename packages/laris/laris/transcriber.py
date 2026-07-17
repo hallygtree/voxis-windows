@@ -27,9 +27,14 @@ class Transcriber:
                 "[STT] mlx-whisper not installed (requires Apple Silicon):\n"
                 "  pip install 'mlx-whisper>=0.4.0'"
             )
-        import mlx
-
-        version = getattr(mlx, "__version__", "0")
+        # the mlx module exposes no __version__ attribute; read it from the
+        # installed distribution metadata (getattr fell back to "0" and made
+        # the thread-safety warning fire on every run, even on new versions)
+        try:
+            from importlib.metadata import version as _dist_version
+            version = _dist_version("mlx")
+        except Exception:  # noqa: BLE001 - metadata missing is not fatal
+            version = "0"
         if _version_tuple(version) < _MIN_MLX_WHISPER:
             print(
                 f"[STT] WARNING: mlx {version} < 0.31.2 - "

@@ -25,6 +25,9 @@ def build_transcript(session_dir: Path, transcriber_factory=None) -> str:
     transcriber = factory()
     if hasattr(transcriber, "warm"):
         transcriber.warm()
+    # NOTE: keep this sequential. mlx-whisper is not safe to call concurrently
+    # from multiple threads sharing one model - parallelizing the two channels
+    # to halve latency would need one Transcriber (Metal context) per thread.
     channels = []
     for wav_name, speaker in CHANNELS:
         path = session_dir / wav_name

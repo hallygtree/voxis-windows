@@ -1,0 +1,36 @@
+name: security-audit
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "0 9 * * 1" # Monday 09:00 UTC - catch advisories published since last push
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Covers the cross-platform artifact shipped to users (the Tauri tray).
+# The Python engines are macOS-only (mlx has no Linux wheel, so pip-audit
+# can't resolve them on a generic runner); audit them locally in each venv:
+#   pip-audit --path packages/<engine>/.venv/lib/python3.11/site-packages
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: apps/tray/src-tauri
+
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+      - working-directory: apps/tray
+        run: npm audit --audit-level=high

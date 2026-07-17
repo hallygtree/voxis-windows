@@ -1,0 +1,26 @@
+# cargo-audit config. These are all `unmaintained`/`unsound` WARNINGS (not
+# vulnerabilities - `cargo audit` reports 0 of those). Every one is a GTK3 /
+# glib / proc-macro binding pulled in transitively by Tauri's Linux webview
+# backend (webkit2gtk); none compile on macOS/Windows, and the code paths are
+# never hit by this app. They clear when Tauri migrates its Linux backend off
+# gtk-rs 0.18. Reviewed 2026-07-17; revisit when Tauri bumps its webview deps.
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0370", # proc-macro-error unmaintained (transitive)
+    "RUSTSEC-2024-0411", # fdehm/gtk3 bindings unmaintained
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0414",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0417",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    "RUSTSEC-2024-0429", # glib VariantStrIter unsound - Linux-only, not called
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0098",
+    "RUSTSEC-2025-0100",
+]
