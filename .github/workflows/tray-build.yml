@@ -25,7 +25,11 @@ jobs:
         with:
           node-version: 20
 
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable @ 2026-07-17
+      # SHA pin loses the channel that the @stable tag name normally carries,
+      # so the toolchain must be named explicitly
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master @ 2026-07-17
+        with:
+          toolchain: stable
 
       - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
