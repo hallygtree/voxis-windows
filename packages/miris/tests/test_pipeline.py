@@ -48,6 +48,17 @@ def test_process_session_happy_path(tmp_path, monkeypatch):
     assert (session / "notes.json").exists()
 
 
+def test_process_session_records_note_path(tmp_path, monkeypatch):
+    good = json.dumps({"categoria": "trabalho", "titulo": "Sync",
+                       "resumo": "R", "action_items": []})
+    cfg = _cfg(tmp_path, f"echo '{good}'")
+    session = _session_with_mic(tmp_path)
+    monkeypatch.setattr("miris.transcribe.speech_spans",
+                        lambda a, sr=16000: [(0, 16000)])
+    note = pipeline.process_session(cfg, session, transcriber_factory=FakeTranscriber)
+    assert (session / "note.path").read_text(encoding="utf-8") == str(note)
+
+
 def test_process_session_llm_failure_goes_to_inbox(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path, "exit 1")
     session = _session_with_mic(tmp_path)

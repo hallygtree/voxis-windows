@@ -60,4 +60,7 @@ def process_session(cfg: Config, session_dir: Path, transcriber_factory=None) ->
         }
     (session_dir / "notes.json").write_text(
         json.dumps(notes, ensure_ascii=False, indent=2), encoding="utf-8")
-    return vault.save_note(cfg, notes, transcript, session_dir.name)
+    note = vault.save_note(cfg, notes, transcript, session_dir.name)
+    # the VOXIS tray reads this to open the last note without parsing CLI stdout
+    (session_dir / "note.path").write_text(str(note), encoding="utf-8")
+    return note
