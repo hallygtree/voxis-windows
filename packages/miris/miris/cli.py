@@ -137,6 +137,9 @@ def cmd_doctor(cfg: config.Config) -> None:
 
 
 def main() -> None:
+    # private meeting audio/transcripts/notes must not be world-readable;
+    # inherited by the detached recorder subprocess too
+    os.umask(0o077)
     parser = argparse.ArgumentParser(prog="miris")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("start")

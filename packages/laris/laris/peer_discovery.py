@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -45,9 +46,19 @@ def write_peer(name: str, url: str, token: str | None = None) -> None:
     data[name] = {"url": url}
     if token is not None:
         data[name]["token"] = token
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.replace(tmp, path)
+    # 0600: this file holds the bearer token - mkstemp creates it 0600 so a
+    # second local account can't read the token off a multi-user machine
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=2))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def peer_url(name: str) -> str | None:

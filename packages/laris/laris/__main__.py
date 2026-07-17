@@ -59,7 +59,10 @@ def main() -> None:
     voice_queue = queue.Queue()
     app = build_app(token=laris_token, voice_queue=voice_queue)
     threading.Thread(
-        target=lambda: uvicorn.run(app, host="127.0.0.1", port=LARIS_PORT),
+        # access_log=False: the token rides in the query string, and the
+        # default access log would write it to the daemon's stdout/log
+        target=lambda: uvicorn.run(app, host="127.0.0.1", port=LARIS_PORT,
+                                   access_log=False),
         daemon=True,
     ).start()
 

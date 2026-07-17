@@ -30,8 +30,20 @@ Each package keeps its own venv, tests and README - see inside.
 1. Engines: clone the repo, create the venvs (`packages/*/README.md`),
    compile `packages/miris/helper` (`make`).
 2. Tray: `cd apps/tray && npm install && npm run tauri build` - installs from
-   `src-tauri/target/release/bundle/dmg/VOXIS_*.dmg` (unsigned: right-click >
-   Open on first launch).
+   `src-tauri/target/release/bundle/dmg/VOXIS_*.dmg`.
+
+### Unsigned builds
+
+Releases are not code-signed or notarized (no paid developer certificates).
+What you will see:
+
+- **macOS**: Gatekeeper blocks the app ("damaged" / "cannot be verified").
+  After dragging VOXIS to Applications, clear the quarantine flag once:
+  `xattr -cr /Applications/VOXIS.app`. On macOS 15+ a right-click > Open is
+  no longer enough.
+- **Windows**: SmartScreen shows "unknown publisher" - "More info" > "Run
+  anyway".
+- **Linux**: `.deb`/AppImage are unaffected.
 
 **Windows / Linux**: the tray compiles and bundles (.msi/.deb/AppImage via
 `tauri build`) but has nothing to control there yet - the engines depend on

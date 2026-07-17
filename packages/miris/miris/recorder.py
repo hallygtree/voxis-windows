@@ -74,6 +74,7 @@ def record(session_dir: Path, stop: threading.Event,
 
 
 def main() -> None:
+    os.umask(0o077)  # private meeting audio - not world-readable on shared machines
     session_dir = Path(sys.argv[1])
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
