@@ -11,7 +11,11 @@ def _setting(key: str, default: str) -> str:
 
 
 MODE = _setting("ASSISTANT_MODE", "ptt")  # "ptt" | "always_on"
-DICTATE_KEY = _setting("DICTATE_KEY", "cmd_r")
+import sys as _sys
+# cmd_r does not exist on Windows; right-shift is a comfortable PTT key there
+# and is in hotkey.py's allowed set. Users change it in the tray settings.
+_DEFAULT_DICTATE_KEY = "shift_r" if _sys.platform == "win32" else "cmd_r"
+DICTATE_KEY = _setting("DICTATE_KEY", _DEFAULT_DICTATE_KEY)
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 512               # Silero VAD window at 16 kHz
