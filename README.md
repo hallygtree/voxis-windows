@@ -7,7 +7,7 @@ that lights up when VOXIS listens.
 |---------|------|
 | `packages/laris` | Dictation engine - push-to-talk / hands-free local STT (mlx-whisper), desktop orb overlay, themeable (`/theme` API) |
 | `packages/miris` | Meeting engine - records mic + system audio (Core Audio tap), transcribes locally, LLM summary + classification into the Obsidian vault |
-| `apps/tray` | (phase 2, upcoming) cross-platform tray app - MIRIS on/off at a glance, LARIS toggles, orb theme, native settings |
+| `apps/tray` | Cross-platform tray app (Tauri v2) - MIRIS on/off at a glance, LARIS toggles, orb theme, native settings window |
 | `brand/` | Wordmark and mark (SVG) |
 
 Each package keeps its own venv, tests and README - see inside.

@@ -1,7 +1,28 @@
-# Tauri + Vanilla TS
+# VOXIS Tray
 
-This template should help get you started developing with Tauri in vanilla HTML, CSS and Typescript.
+Cross-platform tray app (Tauri v2) - the control surface for LARIS
+(dictation) and MIRIS (meeting recorder).
 
-## Recommended IDE Setup
+## Dev
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+    npm install
+    npm run tauri dev
+
+## Build installers
+
+    npm run tauri build        # bundles under src-tauri/target/release/bundle/
+
+Unsigned: macOS Gatekeeper requires right-click > Open on first launch.
+Signing/notarization is documented as out of scope for v1.
+
+## Config files
+
+| File | Owner | Purpose |
+|------|-------|---------|
+| ~/.config/voice-at/tray.json | tray | absolute paths: miris_bin, laris_dir, miris_home |
+| ~/.config/voice-at/laris-settings.json | tray | laris overrides (file > env > default), read at daemon start |
+| ~/.config/voice-at/peers.json | laris | overlay URL + token (read-only for the tray) |
+| ~/.miris/config.toml | user/tray | vault, categories, llm_command (comments preserved) |
+
+Engines are not bundled: laris/miris stay macOS-only Python packages in
+this monorepo; the tray disables their menu items when they are absent.
