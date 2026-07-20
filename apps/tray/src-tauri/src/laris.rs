@@ -137,11 +137,18 @@ impl LarisDaemon {
     }
 
     /// SIGTERM first (laris tears down overlay + keyboard listener), SIGKILL
-    /// after 3s if it hangs.
+    /// after 3s if it hangs. On Windows, kill immediately (engine state is
+    /// in peers.json; no flushing needed beyond tray's stop signal).
     pub fn stop(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
         };
+        #[cfg(windows)]
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
         #[cfg(unix)]
         unsafe {
             libc::kill(child.id() as i32, libc::SIGTERM);

@@ -3,6 +3,10 @@
 # Build from packages/laris/:  pyinstaller packaging/laris.spec --noconfirm
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 from pathlib import Path
+import sys
+
+# Ensure laris package is importable at spec-time for collect_submodules.
+sys.path.insert(0, str(Path(SPECPATH).parent))
 
 datas, binaries, hiddenimports = [], [], []
 datas.append((str(Path(SPECPATH).parent / "frontend"), "frontend"))
@@ -16,11 +20,13 @@ for pkg in ("faster_whisper", "ctranslate2", "av", "onnxruntime", "sounddevice")
 
 # uvicorn resolves its protocol/loop implementations by string at runtime.
 hiddenimports += collect_submodules("uvicorn")
+# Ensure laris and all its lazy-loaded submodules are included in the bundle.
+hiddenimports += collect_submodules("laris")
 hiddenimports += ["tokenizers", "huggingface_hub"]
 
 a = Analysis(
     ["entry.py"],
-    pathex=[".."],  # so `import laris` resolves against packages/laris/
+    pathex=[str(Path(SPECPATH).parent)],  # so `import laris` resolves against packages/laris/
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
