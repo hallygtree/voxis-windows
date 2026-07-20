@@ -6,10 +6,11 @@ use tauri::{AppHandle, Manager};
 
 use crate::{laris, settings, AppState};
 
-const KNOWN_LARIS_KEYS: [&str; 4] = [
+const KNOWN_LARIS_KEYS: [&str; 5] = [
     "ASSISTANT_MODE",
     "DICTATE_KEY",
     "STT_MODEL",
+    "STT_MODEL_FASTER",
     "NOISE_REDUCTION",
 ];
 
@@ -28,6 +29,7 @@ fn valid_value(key: &str, value: &serde_json::Value) -> bool {
         "NOISE_REDUCTION" => matches!(s, "on" | "off"),
         "DICTATE_KEY" => DICTATE_KEYS.contains(&s),
         "STT_MODEL" => !s.trim().is_empty(),
+        "STT_MODEL_FASTER" => !s.trim().is_empty(),
         _ => false,
     }
 }

@@ -141,14 +141,17 @@ source clone.
    release - the text lands in the focused app. Change the key in the tray
    settings window.
 
-**First run downloads the speech model.** The Whisper model (`small`, a few
-hundred MB) is fetched from HuggingFace the first time you dictate, so the
-first use needs internet and takes a moment. After that it runs fully offline.
+**First run downloads the speech model.** The engine uses `faster-whisper`
+(`small` model by default, a few hundred MB) fetched from HuggingFace on first
+dictation, so the first use needs internet and takes a moment. After that it
+runs fully offline. You can change the model size (`small`, `base`, `medium`) in
+the tray settings.
 
-**CPU vs CUDA.** The bundled engine runs on **CPU** (int8) on any machine - the
-guaranteed baseline. An NVIDIA GPU is **not** used automatically in this build;
-CUDA acceleration is a manual upgrade (install the CUDA CTranslate2 runtime),
-not required and not bundled.
+**CPU-only (int8 quantization).** The bundled engine runs on **CPU** (int8 
+quantization) on any machine - the guaranteed baseline, no GPU required. An 
+NVIDIA GPU is **not** used automatically in this build; CUDA acceleration is a 
+manual upgrade (install the CUDA CTranslate2 runtime), not required and not 
+bundled.
 
 **If something breaks.** The engine is windowed (no console), so it logs to
 `%USERPROFILE%\.config\voice-at\laris-engine.log`. Send that file when

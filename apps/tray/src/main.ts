@@ -26,6 +26,11 @@ const DICTATE_KEYS = [
 const $ = <T extends HTMLElement>(sel: string) =>
   document.querySelector(sel) as T;
 
+// Detect if running on Windows (for platform-specific settings)
+function isWindows(): boolean {
+  return navigator.userAgent.toLowerCase().includes('win');
+}
+
 function feedback(msg: string, isError = false) {
   const el = $<HTMLParagraphElement>("#feedback");
   el.textContent = msg;
@@ -53,13 +58,20 @@ async function load() {
     .map((k) => `<option value="${k}">${k}</option>`)
     .join("");
   // an unknown stored value would leave the select unselected and submit ""
+  const defaultKey = isWindows() ? "shift_r" : "cmd_r";
   keySelect.value = DICTATE_KEYS.includes(s.laris.DICTATE_KEY ?? "")
     ? s.laris.DICTATE_KEY
-    : "cmd_r";
+    : defaultKey;
   $<HTMLInputElement>("#hands-free").checked =
     s.laris.ASSISTANT_MODE === "always_on";
-  $<HTMLInputElement>("#stt-model").value =
-    s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
+  // On Windows, use STT_MODEL_FASTER (faster-whisper sizes); on macOS, use STT_MODEL (mlx)
+  if (isWindows()) {
+    $<HTMLInputElement>("#stt-model").value =
+      s.laris.STT_MODEL_FASTER ?? "small";
+  } else {
+    $<HTMLInputElement>("#stt-model").value =
+      s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
+  }
   $<HTMLSelectElement>("#noise").value = s.laris.NOISE_REDUCTION ?? "on";
 
   $<HTMLInputElement>("#vault-root").value = s.miris.vault_root ?? "~/vault";
@@ -92,15 +104,22 @@ function bind() {
 
   $<HTMLButtonElement>("#save-laris").onclick = async () => {
     try {
+      const updates: Record<string, string> = {
+        DICTATE_KEY: $<HTMLSelectElement>("#dictate-key").value,
+        ASSISTANT_MODE: $<HTMLInputElement>("#hands-free").checked
+          ? "always_on"
+          : "ptt",
+        NOISE_REDUCTION: $<HTMLSelectElement>("#noise").value,
+      };
+      // On Windows, persist STT_MODEL_FASTER; on macOS, persist STT_MODEL
+      const modelValue = $<HTMLInputElement>("#stt-model").value.trim();
+      if (isWindows()) {
+        updates.STT_MODEL_FASTER = modelValue;
+      } else {
+        updates.STT_MODEL = modelValue;
+      }
       await invoke("save_laris_settings", {
-        updates: {
-          DICTATE_KEY: $<HTMLSelectElement>("#dictate-key").value,
-          ASSISTANT_MODE: $<HTMLInputElement>("#hands-free").checked
-            ? "always_on"
-            : "ptt",
-          STT_MODEL: $<HTMLInputElement>("#stt-model").value.trim(),
-          NOISE_REDUCTION: $<HTMLSelectElement>("#noise").value,
-        },
+        updates,
       });
       feedback("Ditado salvo.");
     } catch (e) {
