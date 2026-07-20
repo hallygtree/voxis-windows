@@ -62,6 +62,34 @@ impl Default for TrayConfig {
     }
 }
 
+#[cfg(windows)]
+const MIRIS_ENGINE_NAME: &str = "miris-engine.exe";
+#[cfg(not(windows))]
+const MIRIS_ENGINE_NAME: &str = "miris-engine";
+
+/// Which miris binary to actually run. The tray.json default
+/// (`~/.local/bin/miris`) is a pip console-script that only exists where
+/// Python does - on a packaged Windows install there is no such file and
+/// every "Gravar reuniao" click would fail with a spawn error.
+///
+/// Rule: an existing configured path always wins (an explicit user override
+/// must not be silently ignored); otherwise fall back to the engine bundled
+/// as a resource. `is_file` matters: `engine-miris/` ships with a `.gitkeep`
+/// placeholder, so the directory exists in builds where the engine was never
+/// staged - only the exe itself counts.
+pub fn effective_miris_bin(configured: &str, resource_dir: Option<&Path>) -> String {
+    if Path::new(configured).is_file() {
+        return configured.to_owned();
+    }
+    resource_dir
+        .map(|r| r.join("engine-miris").join(MIRIS_ENGINE_NAME))
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        // keep the configured path so the failure names something the user
+        // recognises from tray.json instead of an empty string
+        .unwrap_or_else(|| configured.to_owned())
+}
+
 pub fn load_tray_config() -> TrayConfig {
     let path = config_dir().join("tray.json");
     std::fs::read_to_string(&path)
@@ -171,6 +199,34 @@ mod tests {
         assert!(cfg.miris_bin.ends_with("/.local/bin/miris"));
         assert!(cfg.laris_dir.ends_with("/code/voxis/packages/laris"));
         assert!(cfg.miris_home.ends_with("/.miris"));
+    }
+
+    #[test]
+    fn effective_miris_bin_prefers_bundle_only_when_configured_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let res = tmp.path().join("resources");
+        let engine_dir = res.join("engine-miris");
+        fs::create_dir_all(&engine_dir).unwrap();
+        let missing = tmp.path().join("no/such/miris").to_string_lossy().into_owned();
+
+        // engine-miris/ exists but holds only the .gitkeep placeholder
+        fs::write(engine_dir.join(".gitkeep"), "").unwrap();
+        assert_eq!(effective_miris_bin(&missing, Some(&res)), missing);
+        assert_eq!(effective_miris_bin(&missing, None), missing);
+
+        // once the frozen engine is staged there, it wins over the dead path
+        let engine = engine_dir.join(MIRIS_ENGINE_NAME);
+        fs::write(&engine, "").unwrap();
+        assert_eq!(
+            effective_miris_bin(&missing, Some(&res)),
+            engine.to_string_lossy()
+        );
+
+        // an existing configured path is an explicit override - never replaced
+        let configured = tmp.path().join("my-miris");
+        fs::write(&configured, "").unwrap();
+        let configured = configured.to_string_lossy().into_owned();
+        assert_eq!(effective_miris_bin(&configured, Some(&res)), configured);
     }
 
     const SAMPLE_TOML: &str = "\

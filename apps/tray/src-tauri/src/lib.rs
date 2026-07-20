@@ -282,16 +282,22 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let config = settings::load_tray_config();
+            let mut config = settings::load_tray_config();
+            // packaged builds ship miris frozen as a resource; tray.json's
+            // default path only exists on a machine with the pip install
+            let resource_dir = app.path().resource_dir().ok();
+            let miris_bin =
+                settings::effective_miris_bin(&config.miris_bin, resource_dir.as_deref());
+            config.miris_bin = miris_bin;
             let daemon = {
                 #[cfg(windows)]
                 {
-                    let engine = app
-                        .path()
-                        .resource_dir()
-                        .ok()
+                    let engine = resource_dir
+                        .as_ref()
                         .map(|r| r.join("engine").join("laris-engine.exe"))
-                        .filter(|p| p.exists());
+                        // is_file, not exists: engine/ ships a .gitkeep
+                        // placeholder, so the dir can be there with no engine
+                        .filter(|p| p.is_file());
                     match engine {
                         Some(bin) => laris::LarisDaemon::with_engine(
                             bin,
