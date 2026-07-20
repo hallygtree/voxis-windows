@@ -12,7 +12,7 @@ from typing import Callable
 
 import numpy as np
 
-from miris.systemtap import SystemTap
+from miris.systemtap import Tap, default_tap_factory
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1600  # 100ms
@@ -42,9 +42,11 @@ def _default_open_stream(callback):
 
 
 def record(session_dir: Path, stop: threading.Event,
-           tap_factory: Callable[[Path], SystemTap] = SystemTap,
+           tap_factory: Callable[[Path], Tap] | None = None,
            open_stream: Callable | None = None) -> None:
     """Record both channels into session_dir until stop is set."""
+    if tap_factory is None:
+        tap_factory = default_tap_factory()
     tap = tap_factory(session_dir / "system.wav")
     tap.start()
     writer: WavWriter | None = None

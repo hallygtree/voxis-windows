@@ -1,0 +1,25 @@
+# Windows-specific requirements for Miris (torch-free)
+# Used for PyInstaller frozen builds and isolated Windows environments
+
+# Core dependencies
+numpy>=1.24.0
+sounddevice>=0.4.6
+
+# System audio capture (WASAPI loopback)
+# Primary choice: soundcard (pure-Python via CFFI, no compilation needed)
+soundcard>=0.4.6
+
+# Transcription via laris (faster-whisper backend, no torch)
+# The laris package should be installed via: pip install -e ../laris
+# Ensure laris is configured for faster-whisper (onnxruntime, not torch/mlx)
+# See: packages/laris/laris/stt_faster.py
+laris
+
+# Testing (optional, for development)
+pytest>=8.0.0
+
+# Excluded:
+# - torch, torchaudio (use faster-whisper via onnxruntime instead)
+# - silero-vad (use faster-whisper's built-in VAD)
+# - mlx (macOS-only, not needed on Windows)
+# - pyobjc (macOS-only, not needed on Windows)

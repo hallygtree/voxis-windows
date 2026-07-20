@@ -46,3 +46,17 @@ class FasterWhisperTranscriber:
             condition_on_previous_text=False,  # same anti-repetition fix as mlx path
         )
         return "".join(seg.text for seg in segments).strip()
+
+    def transcribe_with_vad(self, audio: np.ndarray, sample_rate: int = config.SAMPLE_RATE) -> list:
+        """Transcribe with VAD filtering enabled, returning segments with timestamps.
+        Each segment has: start (seconds), end (seconds), text."""
+        if len(audio) == 0:
+            return []
+        segments, _info = self._model.transcribe(
+            audio.astype(np.float32),
+            language=config.STT_LANGUAGE or None,  # "" -> auto-detect
+            task="transcribe",
+            condition_on_previous_text=False,
+            vad_filter=True,  # Enable Silero VAD filtering
+        )
+        return list(segments)

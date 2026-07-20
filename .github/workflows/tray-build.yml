@@ -69,6 +69,18 @@ jobs:
           Copy-Item -Recurse -Force dist/laris-engine/* ../../apps/tray/src-tauri/engine/
         shell: pwsh
 
+      - name: Build frozen miris engine (Windows)
+        if: matrix.platform == 'windows-latest'
+        working-directory: packages/miris
+        run: |
+          pip install -r requirements-windows.txt pyinstaller
+          pip install -e .
+          pyinstaller packaging/miris.spec --noconfirm
+          # stage the onedir output where tauri.windows.conf.json expects it
+          New-Item -ItemType Directory -Force -Path ../../apps/tray/src-tauri/engine-miris | Out-Null
+          Copy-Item -Recurse -Force dist/miris-engine/* ../../apps/tray/src-tauri/engine-miris/
+        shell: pwsh
+
       # On tag pushes this drafts a GitHub release with the installers
       # (.dmg / .msi / .deb / .AppImage); on manual dispatch it only builds.
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0

@@ -1,6 +1,7 @@
 """Post-meeting pipeline: WAVs -> transcript -> notes -> vault note."""
 import json
 import os
+import sys
 from pathlib import Path
 
 from miris import notes as notes_mod
@@ -15,8 +16,14 @@ def _default_transcriber_factory():
     # meetings are bilingual (pt-BR + English): default Whisper to auto-detect
     # per utterance unless the user pinned STT_LANGUAGE themselves
     os.environ.setdefault("STT_LANGUAGE", "")
-    from laris.transcriber import Transcriber
-    return Transcriber()
+    if sys.platform == "win32":
+        # Windows: use faster-whisper (torch-free)
+        from laris.stt_faster import FasterWhisperTranscriber
+        return FasterWhisperTranscriber()
+    else:
+        # macOS: use mlx-whisper
+        from laris.transcriber import Transcriber
+        return Transcriber()
 
 
 def build_transcript(session_dir: Path, transcriber_factory=None) -> str:

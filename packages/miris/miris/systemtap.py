@@ -1,13 +1,37 @@
-"""Own the audiotap helper process (system-audio capture)."""
+"""System audio capture: platform-specific backends (macOS audiotap, Windows WASAPI loopback)."""
 import os
 import signal
 import subprocess
+import sys
+from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Callable
 
 DEFAULT_BIN = Path(__file__).resolve().parent.parent / "helper" / "audiotap"
 
 
-class SystemTap:
+class Tap(ABC):
+    """Abstract interface for system audio capture."""
+
+    @abstractmethod
+    def start(self) -> None:
+        """Start capturing system audio."""
+        pass
+
+    @abstractmethod
+    def alive(self) -> bool:
+        """Check if capture is running."""
+        pass
+
+    @abstractmethod
+    def stop(self, grace_s: float = 5.0) -> None:
+        """Stop capturing and finalize output WAV."""
+        pass
+
+
+class SystemTap(Tap):
+    """macOS system audio capture via audiotap subprocess."""
+
     def __init__(self, out_wav: Path, binary: Path | None = None):
         self.out_wav = out_wav
         # explicit binary wins; MIRIS_AUDIOTAP only overrides the default
@@ -33,3 +57,16 @@ class SystemTap:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
+
+
+def default_tap_factory() -> Callable[[Path], Tap]:
+    """Return platform-specific Tap factory.
+
+    On Windows: returns WindowsLoopbackTap (WASAPI loopback in-process)
+    On macOS/Linux: returns SystemTap (audiotap subprocess)
+    """
+    if sys.platform == "win32":
+        from miris.loopback_windows import WindowsLoopbackTap
+        return WindowsLoopbackTap
+    else:
+        return SystemTap

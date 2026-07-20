@@ -2,6 +2,7 @@
 import argparse
 import datetime as dt
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -41,9 +42,23 @@ def cmd_start(cfg: config.Config) -> None:
     # open for the whole recording, deadlocking any caller that reads them
     # (the VOXIS tray collects this CLI's output)
     with (session / "recorder.log").open("ab") as log:
-        subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session)],
-                         start_new_session=True, stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=log)
+        if getattr(sys, "frozen", False):
+            # Frozen executable: use __recorder subcommand with platform-specific detach
+            if sys.platform == "win32":
+                # Windows: CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+                subprocess.Popen([sys.executable, "__recorder", str(session)],
+                                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                 creationflags=0x00000200 | 0x00000008)
+            else:
+                # macOS: use start_new_session
+                subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session)],
+                                 start_new_session=True, stdin=subprocess.DEVNULL,
+                                 stdout=log, stderr=log)
+        else:
+            # Unfrozen (development): use -m miris.recorder with start_new_session
+            subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session)],
+                             start_new_session=True, stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=log)
     for _ in range(50):
         if (session / "recorder.pid").exists():
             print(f"recording -> {session}")
@@ -58,10 +73,17 @@ def cmd_stop(cfg: config.Config) -> None:
     if not session:
         sys.exit("no active recording")
     pid_file = session / "recorder.pid"
+    stop_sentinel = session / "stop"
+
+    # Create stop sentinel for cross-platform shutdown (especially Windows frozen)
+    stop_sentinel.touch()
+
+    # Try SIGTERM on Unix, but don't fail if unsupported (Windows frozen)
     try:
         os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, OSError):
         pass
+
     while pid_file.exists():
         try:
             os.kill(pid, 0)
@@ -97,12 +119,20 @@ def cmd_doctor(cfg: config.Config) -> None:
     """End-to-end smoke: binary, vault, llm, 3s system-audio capture."""
     import tempfile
 
-    from miris.systemtap import SystemTap
+    from miris.systemtap import SystemTap, default_tap_factory
     ok = True
 
-    tap_bin = SystemTap(Path("/dev/null")).binary
-    print(f"[{'ok' if tap_bin.exists() else 'FAIL'}] audiotap binary: {tap_bin}")
-    ok &= tap_bin.exists()
+    # Platform-specific system audio check
+    if sys.platform != "win32":
+        # macOS/Linux: check audiotap binary
+        tap_bin = SystemTap(Path("/dev/null")).binary
+        print(f"[{'ok' if tap_bin.exists() else 'FAIL'}] audiotap binary: {tap_bin}")
+        ok &= tap_bin.exists()
+        tap_check_required = tap_bin.exists()
+    else:
+        # Windows: check WASAPI loopback availability (no binary to check)
+        print("[ok] system audio: WASAPI loopback (Windows)")
+        tap_check_required = True
 
     print(f"[{'ok' if cfg.vault_root.is_dir() else 'FAIL'}] vault_root: {cfg.vault_root}")
     ok &= cfg.vault_root.is_dir()
@@ -110,8 +140,13 @@ def cmd_doctor(cfg: config.Config) -> None:
     print(f"[{'ok' if cfg.categories else 'WARN'}] categories configured: "
           f"{list(cfg.categories) or 'none (everything goes to inbox)'}")
 
+    # Resolve llm_command[0] via shutil.which to handle .cmd/.exe shims on Windows
+    llm_cmd = list(cfg.llm_command)
+    resolved_bin = shutil.which(llm_cmd[0])
+    if resolved_bin:
+        llm_cmd[0] = resolved_bin
     try:
-        llm = subprocess.run(cfg.llm_command + ["Responda apenas: OK"],
+        llm = subprocess.run(llm_cmd + ["Responda apenas: OK"],
                              capture_output=True, text=True, timeout=120)
         llm_ok = llm.returncode == 0 and llm.stdout.strip() != ""
     except (OSError, subprocess.TimeoutExpired):
@@ -119,12 +154,13 @@ def cmd_doctor(cfg: config.Config) -> None:
     print(f"[{'ok' if llm_ok else 'FAIL'}] llm_command: {' '.join(cfg.llm_command)}")
     ok &= llm_ok
 
-    if tap_bin.exists():
+    if tap_check_required:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "tap-smoke.wav"
-            tap = SystemTap(out)
-            tap.start()
+            tap_factory_func = default_tap_factory()
+            tap = tap_factory_func(out)
             try:
+                tap.start()
                 time.sleep(3)
             finally:
                 tap.stop()  # never leave an orphan capture process

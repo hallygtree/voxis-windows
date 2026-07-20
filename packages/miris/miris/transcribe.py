@@ -67,10 +67,20 @@ def transcribe_channel(path: Path, speaker: str, transcriber,
                        spans_fn=speech_spans) -> list[Segment]:
     audio = load_wav_mono16k(path)
     segments = []
-    for start, end in spans_fn(audio):
-        text = collapse_repetitions(transcriber.transcribe(audio[start:end]))
-        if text:
-            segments.append(Segment(start / TARGET_SR, end / TARGET_SR, speaker, text))
+
+    # If transcriber supports VAD-aware transcription (faster-whisper), use it
+    if hasattr(transcriber, "transcribe_with_vad"):
+        # Returns faster-whisper segments with start/end timestamps
+        for segment in transcriber.transcribe_with_vad(audio):
+            text = collapse_repetitions(segment.text)
+            if text:
+                segments.append(Segment(segment.start, segment.end, speaker, text))
+    else:
+        # Fallback: use speech_spans for VAD (legacy path for mlx)
+        for start, end in spans_fn(audio):
+            text = collapse_repetitions(transcriber.transcribe(audio[start:end]))
+            if text:
+                segments.append(Segment(start / TARGET_SR, end / TARGET_SR, speaker, text))
     return segments
 
 
