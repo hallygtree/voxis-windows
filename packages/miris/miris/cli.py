@@ -12,6 +12,40 @@ from pathlib import Path
 from miris import config, pipeline
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if `pid` names a running process.
+
+    `os.kill(pid, 0)` is not a portable liveness probe: on Windows a dead pid
+    makes it raise a bare `OSError` (WinError 87, ERROR_INVALID_PARAMETER),
+    not `ProcessLookupError`, so the usual `except ProcessLookupError` misses
+    it and the traceback escapes to the user. Query the process object
+    directly there instead.
+    """
+    if sys.platform == "win32":
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        WAIT_TIMEOUT = 0x102
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = k32.OpenProcess(
+            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False  # no such process (or exited and fully reaped)
+        try:
+            # a process object is signalled once the process exits; still
+            # waiting means still running (exact, unlike STILL_ACTIVE==259)
+            return k32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        # PermissionError means someone else's process reused the pid: not ours
+        return False
+
+
 def _live_session(cfg: config.Config):
     """Newest session with a live recorder pid, or (None, None). Stale pidfiles
     (process gone) are removed on the way."""
@@ -23,9 +57,11 @@ def _live_session(cfg: config.Config):
             continue
         try:
             pid = int(pid_file.read_text())
-            os.kill(pid, 0)
-        except (ValueError, ProcessLookupError, PermissionError):
-            pid_file.unlink(missing_ok=True)  # corrupt or stale
+        except (ValueError, OSError):
+            pid_file.unlink(missing_ok=True)  # corrupt or truncated write
+            continue
+        if not _pid_alive(pid):
+            pid_file.unlink(missing_ok=True)  # stale
             continue
         return session, pid
     return None, None
@@ -85,9 +121,7 @@ def cmd_stop(cfg: config.Config) -> None:
         pass
 
     while pid_file.exists():
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:  # died hard without cleanup - don't hang
+        if not _pid_alive(pid):  # died hard without cleanup - don't hang
             pid_file.unlink(missing_ok=True)
             break
         time.sleep(0.2)
