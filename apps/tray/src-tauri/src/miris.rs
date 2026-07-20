@@ -47,9 +47,55 @@ fn pid_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
-#[cfg(not(unix))]
+/// Raw kernel32 bindings instead of `windows-sys`: this file is the only
+/// Win32 caller in the crate, and the crate cannot be compiled on the dev
+/// machine (no Rust toolchain) - the fixed C ABI is the one thing that cannot
+/// break under me, whereas windows-sys feature names and the HANDLE
+/// representation both changed across its 0.48/0.52/0.59 releases.
+#[cfg(windows)]
+#[allow(non_snake_case)] // Win32 symbol names, kept verbatim for greppability
+mod win32 {
+    use std::ffi::c_void;
+
+    pub const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    pub const WAIT_TIMEOUT: u32 = 258;
+    pub const ERROR_ACCESS_DENIED: u32 = 5;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn OpenProcess(access: u32, inherit_handle: i32, pid: u32) -> *mut c_void;
+        pub fn WaitForSingleObject(handle: *mut c_void, millis: u32) -> u32;
+        pub fn CloseHandle(handle: *mut c_void) -> i32;
+        pub fn GetLastError() -> u32;
+    }
+}
+
+#[cfg(windows)]
+fn pid_alive(pid: i32) -> bool {
+    use win32::*;
+
+    // QUERY_LIMITED_INFORMATION is the weakest right that still opens a
+    // process object; it works across integrity levels where PROCESS_QUERY_
+    // INFORMATION would be denied.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
+    if handle.is_null() {
+        // ERROR_ACCESS_DENIED means the pid *exists* but belongs to a more
+        // privileged process - treat it as alive, like unix treats EPERM.
+        // Anything else (ERROR_INVALID_PARAMETER for an unknown pid) is dead.
+        return unsafe { GetLastError() } == ERROR_ACCESS_DENIED;
+    }
+    // WaitForSingleObject, not GetExitCodeProcess: a process that legitimately
+    // exits with code 259 is indistinguishable from STILL_ACTIVE (259). The
+    // process object is signalled exactly when the process has exited, so a
+    // 0ms wait that times out means "still running" with no such ambiguity.
+    let alive = unsafe { WaitForSingleObject(handle, 0) } == WAIT_TIMEOUT;
+    unsafe { CloseHandle(handle) }; // every path that opened one closes it
+    alive
+}
+
+#[cfg(not(any(unix, windows)))]
 fn pid_alive(_pid: i32) -> bool {
-    false // engines are macOS-only today
+    false // no engine ships for this platform
 }
 
 /// Minutes elapsed since the session started (its dir name is the timestamp).
@@ -130,7 +176,7 @@ mod tests {
         assert_eq!(status(tmp.path()), MirisStatus::Idle);
     }
 
-    #[cfg(unix)] // pid_alive is a no-op off unix (engines are macOS-only)
+    #[cfg(any(unix, windows))] // pid_alive is real on both; a no-op elsewhere
     #[test]
     fn status_recording_with_live_pid() {
         let tmp = tempfile::tempdir().unwrap();
@@ -162,7 +208,7 @@ mod tests {
         assert_eq!(status(tmp.path()), MirisStatus::Idle);
     }
 
-    #[cfg(unix)] // pid_alive is a no-op off unix (engines are macOS-only)
+    #[cfg(any(unix, windows))] // pid_alive is real on both; a no-op elsewhere
     #[test]
     fn status_newest_live_session_wins() {
         let tmp = tempfile::tempdir().unwrap();
@@ -211,6 +257,16 @@ mod tests {
 
     #[test]
     fn run_cli_captures_stdout_and_stderr() {
+        // `echo` is a shell builtin on Windows, not an exe - CreateProcess
+        // would fail and this would test nothing but the error path. `where`
+        // lives in System32 (always on PATH) and `where where` prints its own
+        // location with exit 0.
+        #[cfg(windows)]
+        {
+            let out = run_cli("where", "where").unwrap();
+            assert!(out.to_lowercase().contains("where.exe"), "unexpected: {out}");
+        }
+        #[cfg(not(windows))]
         assert_eq!(run_cli("echo", "start").unwrap().trim(), "start");
         assert!(run_cli("/nonexistent-bin-xyz", "start").is_err());
     }
