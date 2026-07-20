@@ -136,31 +136,41 @@ impl LarisDaemon {
         Ok(())
     }
 
-    /// SIGTERM first (laris tears down overlay + keyboard listener), SIGKILL
-    /// after 3s if it hangs. On Windows, kill immediately (engine state is
-    /// in peers.json; no flushing needed beyond tray's stop signal).
+    /// Unix: SIGTERM first (laris tears down overlay + keyboard listener),
+    /// SIGKILL after 3s if it hangs.
+    ///
+    /// Windows: TerminateProcess right away. There is no SIGTERM there, and
+    /// the frozen engine has no state to flush - peers.json is written at boot
+    /// and a stale entry reads as offline (the TCP probe fails). Waiting the
+    /// 3s grace period would only freeze the tray on every toggle-off,
+    /// settings save and quit.
     pub fn stop(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
         };
-        #[cfg(windows)]
+        // exactly one arm compiles per platform - no unreachable tail
+        #[cfg(unix)]
         {
+            unsafe {
+                libc::kill(child.id() as i32, libc::SIGTERM);
+            }
+            for _ in 0..30 {
+                if let Ok(Some(_)) = child.try_wait() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             let _ = child.kill();
             let _ = child.wait();
-            return;
         }
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
+        #[cfg(not(unix))]
+        {
+            // kill() is a no-op error if it already exited; wait() then just
+            // reaps. stdout/stderr go to a file, never a pipe, so there is no
+            // buffer for wait() to block on.
+            let _ = child.kill();
+            let _ = child.wait();
         }
-        for _ in 0..30 {
-            if let Ok(Some(_)) = child.try_wait() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
     }
 }
 
