@@ -15,6 +15,7 @@ type Settings = {
   } | null;
   laris_alive: boolean;
   version: string;
+  platform: string; // std::env::consts::OS: "windows" | "macos" | "linux"
 };
 
 // mirrors laris/hotkey.py _ALLOWED (ctrl/alt are broken as global hotkeys on macOS)
@@ -26,10 +27,12 @@ const DICTATE_KEYS = [
 const $ = <T extends HTMLElement>(sel: string) =>
   document.querySelector(sel) as T;
 
-// Detect if running on Windows (for platform-specific settings)
-function isWindows(): boolean {
-  return navigator.userAgent.toLowerCase().includes('win');
-}
+// Set from the backend's std::env::consts::OS on load(). Not sniffed from
+// navigator.userAgent: a wrong answer here is silent (the user saves a
+// DICTATE_KEY that never fires, or an STT key the engine never reads), so it
+// comes from the process that actually spawns the engine. bind()'s handlers
+// only run after load() resolved.
+let isWindows = false;
 
 function feedback(msg: string, isError = false) {
   const el = $<HTMLParagraphElement>("#feedback");
@@ -52,25 +55,34 @@ function categoryRow(name = "", folder = ""): HTMLTableRowElement {
 
 async function load() {
   const s = await invoke<Settings>("get_settings");
+  isWindows = s.platform === "windows";
 
   const keySelect = $<HTMLSelectElement>("#dictate-key");
   keySelect.innerHTML = DICTATE_KEYS
     .map((k) => `<option value="${k}">${k}</option>`)
     .join("");
   // an unknown stored value would leave the select unselected and submit ""
-  const defaultKey = isWindows() ? "shift_r" : "cmd_r";
+  // must match laris/config.py::_DEFAULT_DICTATE_KEY - cmd_r does not exist
+  // on Windows, so a cmd_r default there is a hotkey that never fires
+  const defaultKey = isWindows ? "shift_r" : "cmd_r";
   keySelect.value = DICTATE_KEYS.includes(s.laris.DICTATE_KEY ?? "")
     ? s.laris.DICTATE_KEY
     : defaultKey;
   $<HTMLInputElement>("#hands-free").checked =
     s.laris.ASSISTANT_MODE === "always_on";
-  // On Windows, use STT_MODEL_FASTER (faster-whisper sizes); on macOS, use STT_MODEL (mlx)
-  if (isWindows()) {
-    $<HTMLInputElement>("#stt-model").value =
-      s.laris.STT_MODEL_FASTER ?? "small";
+  // Windows runs faster-whisper (plain size names, STT_MODEL_FASTER); macOS
+  // runs mlx (repo ids, STT_MODEL). The field is free text on purpose - a
+  // local model dir is valid too - so the placeholder is the only hint the
+  // user gets that the two are not interchangeable.
+  const model = $<HTMLInputElement>("#stt-model");
+  if (isWindows) {
+    model.value = s.laris.STT_MODEL_FASTER ?? "small";
+    model.placeholder = "small";
+    model.title = "faster-whisper: tiny | base | small | medium | large-v3";
   } else {
-    $<HTMLInputElement>("#stt-model").value =
-      s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
+    model.value = s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
+    model.placeholder = "mlx-community/whisper-large-v3-turbo-q4";
+    model.title = "mlx-whisper model id";
   }
   $<HTMLSelectElement>("#noise").value = s.laris.NOISE_REDUCTION ?? "on";
 
@@ -113,7 +125,7 @@ function bind() {
       };
       // On Windows, persist STT_MODEL_FASTER; on macOS, persist STT_MODEL
       const modelValue = $<HTMLInputElement>("#stt-model").value.trim();
-      if (isWindows()) {
+      if (isWindows) {
         updates.STT_MODEL_FASTER = modelValue;
       } else {
         updates.STT_MODEL = modelValue;

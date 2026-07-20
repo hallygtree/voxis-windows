@@ -41,6 +41,12 @@ pub struct SettingsPayload {
     theme: Option<serde_json::Value>,
     laris_alive: bool,
     version: String,
+    /// The engine's platform, straight from the build that spawns it. The UI
+    /// picks per-platform defaults (DICTATE_KEY, STT model key) from this;
+    /// sniffing navigator.userAgent instead would put the whole thing at the
+    /// mercy of a webview UA string, and getting it wrong is silent - the
+    /// user saves a key that simply never fires.
+    platform: String,
 }
 
 fn peer() -> Option<laris::LarisPeer> {
@@ -64,6 +70,7 @@ pub async fn get_settings(app: AppHandle) -> SettingsPayload {
         theme,
         laris_alive,
         version: app.package_info().version.to_string(),
+        platform: std::env::consts::OS.to_string(), // "windows" | "macos" | "linux"
     }
 }
 
