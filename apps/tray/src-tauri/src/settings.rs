@@ -211,22 +211,22 @@ mod tests {
 
         // engine-miris/ exists but holds only the .gitkeep placeholder
         fs::write(engine_dir.join(".gitkeep"), "").unwrap();
-        assert_eq!(effective_miris_bin(&missing, Some(&res)), missing);
+        assert_eq!(effective_miris_bin(&missing, Some(res.as_path())), missing);
         assert_eq!(effective_miris_bin(&missing, None), missing);
 
         // once the frozen engine is staged there, it wins over the dead path
         let engine = engine_dir.join(MIRIS_ENGINE_NAME);
         fs::write(&engine, "").unwrap();
         assert_eq!(
-            effective_miris_bin(&missing, Some(&res)),
-            engine.to_string_lossy()
+            effective_miris_bin(&missing, Some(res.as_path())),
+            engine.to_string_lossy().into_owned()
         );
 
         // an existing configured path is an explicit override - never replaced
         let configured = tmp.path().join("my-miris");
         fs::write(&configured, "").unwrap();
         let configured = configured.to_string_lossy().into_owned();
-        assert_eq!(effective_miris_bin(&configured, Some(&res)), configured);
+        assert_eq!(effective_miris_bin(&configured, Some(res.as_path())), configured);
     }
 
     const SAMPLE_TOML: &str = "\

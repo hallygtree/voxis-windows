@@ -89,7 +89,7 @@ fn pid_alive(pid: i32) -> bool {
     // process object is signalled exactly when the process has exited, so a
     // 0ms wait that times out means "still running" with no such ambiguity.
     let alive = unsafe { WaitForSingleObject(handle, 0) } == WAIT_TIMEOUT;
-    unsafe { CloseHandle(handle) }; // every path that opened one closes it
+    let _ = unsafe { CloseHandle(handle) }; // every path that opened one closes it
     alive
 }
 
