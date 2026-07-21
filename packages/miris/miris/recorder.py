@@ -12,10 +12,12 @@ from typing import Callable
 
 import numpy as np
 
+from miris.config import STOP_SENTINEL
 from miris.systemtap import Tap, default_tap_factory
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1600  # 100ms
+SENTINEL_POLL_S = 0.2
 
 
 class WavWriter:
@@ -75,13 +77,32 @@ def record(session_dir: Path, stop: threading.Event,
             tap.stop()
 
 
+def watch_stop_sentinel(session_dir: Path, stop: threading.Event,
+                        poll_s: float = SENTINEL_POLL_S) -> None:
+    """Set `stop` once `miris stop` drops the sentinel file into session_dir.
+
+    This is the stop channel on Windows: there is no deliverable SIGTERM
+    there, `os.kill(pid, SIGTERM)` is `TerminateProcess`, and a terminated
+    process never runs the `finally` that closes mic.wav / system.wav. Polling
+    a file lets the recorder shut itself down and finalize both WAVs.
+    """
+    while not stop.wait(poll_s):  # returns True as soon as stop is set elsewhere
+        if (session_dir / STOP_SENTINEL).exists():
+            stop.set()
+            return
+
+
 def main() -> None:
     os.umask(0o077)  # private meeting audio - not world-readable on shared machines
     session_dir = Path(sys.argv[1])
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
+    threading.Thread(target=watch_stop_sentinel, args=(session_dir, stop),
+                     daemon=True).start()
     pid_file = session_dir / "recorder.pid"
+    # written last: `miris start` waits on this file to declare the recorder
+    # up, and `miris stop` waits on it disappearing to know it is down
     pid_file.write_text(str(os.getpid()))
     try:
         record(session_dir, stop)

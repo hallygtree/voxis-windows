@@ -11,6 +11,10 @@ from pathlib import Path
 
 from miris import config, pipeline
 
+# how long `miris stop` waits for the recorder to honour the stop sentinel
+# before force-killing it (a wedged recorder must not hang the tray)
+STOP_GRACE_S = 15.0
+
 
 def _pid_alive(pid: int) -> bool:
     """True if `pid` names a running process.
@@ -109,19 +113,36 @@ def cmd_stop(cfg: config.Config) -> None:
     if not session:
         sys.exit("no active recording")
     pid_file = session / "recorder.pid"
-    stop_sentinel = session / "stop"
 
-    # Create stop sentinel for cross-platform shutdown (especially Windows frozen)
-    stop_sentinel.touch()
+    # The sentinel is the shutdown channel; the recorder polls for it and
+    # closes both WAVs on the way out (recorder.watch_stop_sentinel).
+    (session / config.STOP_SENTINEL).touch()
 
-    # Try SIGTERM on Unix, but don't fail if unsupported (Windows frozen)
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, OSError):
-        pass
+    if sys.platform != "win32":
+        # POSIX only: SIGTERM wakes the recorder immediately instead of after
+        # one poll interval. On Windows os.kill is TerminateProcess - sending
+        # it here would kill the recorder *before* it ever sees the sentinel,
+        # truncating mic.wav/system.wav, which is the whole reason the
+        # sentinel exists.
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
 
+    deadline = time.monotonic() + STOP_GRACE_S
     while pid_file.exists():
         if not _pid_alive(pid):  # died hard without cleanup - don't hang
+            pid_file.unlink(missing_ok=True)
+            break
+        if time.monotonic() >= deadline:
+            # never block the caller forever: the tray runs this synchronously
+            print(f"recorder {pid} did not stop within {STOP_GRACE_S}s; killing it "
+                  "(the tail of this recording may be missing)", file=sys.stderr)
+            try:
+                os.kill(pid, signal.SIGKILL if hasattr(signal, "SIGKILL")
+                        else signal.SIGTERM)
+            except OSError:
+                pass
             pid_file.unlink(missing_ok=True)
             break
         time.sleep(0.2)

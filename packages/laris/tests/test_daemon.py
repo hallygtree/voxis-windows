@@ -1,6 +1,9 @@
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from unittest.mock import MagicMock
+
+import pytest
 
 from laris.state_machine import (
     PHASE_AWAITING_DICTATION,
@@ -254,3 +257,55 @@ def test_kiris_dispatch_skipped_when_offline_returns_false():
     assert phase == PHASE_IDLE
     # Utterance is typed as dictation (kiris offline -> fallback)
     typer.assert_called_once_with("kiris abre o axon")
+
+
+class _StopLoop(Exception):
+    """Breaks daemon.run's infinite loop from a stubbed _wait_for_ptt."""
+
+
+def test_hands_free_unavailable_does_not_kill_the_daemon(monkeypatch, capsys):
+    """The torch-free Windows bundle has no silero-vad, so VadCapture() exits
+    the process. A double-tap of the PTT key must not take plain dictation
+    down with it - regression for the daemon dying on a documented gesture."""
+    import laris.audio_capture as audio_capture
+    import laris.daemon as daemon_mod
+    import laris.hotkey as hotkey_mod
+    import laris.platform as platform_mod
+
+    class FakeBackend:
+        def warm(self): pass
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+
+        def start(self): pass
+
+    def no_silero(*args, **kwargs):
+        raise SystemExit("[Audio] silero-vad not installed: pip install silero-vad")
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+    monkeypatch.setattr(audio_capture, "VadCapture", no_silero)
+
+    rounds = {"n": 0}
+
+    def fake_wait(pressed, hands_free=None, on_tick=lambda: None):
+        rounds["n"] += 1
+        if rounds["n"] == 1:
+            hands_free.set()
+            return "hands_free", hands_free
+        raise _StopLoop  # the loop survived round 1: that is the assertion
+
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", fake_wait)
+
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(make_voice_session=lambda: MagicMock())
+
+    assert "hands-free unavailable" in capsys.readouterr().out
+    assert rounds["n"] == 2

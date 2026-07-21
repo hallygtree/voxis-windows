@@ -147,6 +147,7 @@ def run(
     ptt = PushToTalk(config.DICTATE_KEY)
     ptt.start()
     vad = None
+    vad_unavailable = False
     kiris = "com Kiris (assistente)" if assistant else "pura (VOICE_ASSISTANT=0, muda)"
     print(f"[Voice] Laris (transcritora) pronta, {kiris} - PTT: {config.DICTATE_KEY}")
 
@@ -157,9 +158,25 @@ def run(
     while True:
         kind, pressed = _wait_for_ptt(ptt.pressed, hands_free=ptt.hands_free, on_tick=_reset_orb_if_stale)
         if kind == "hands_free":
+            # The torch-free Windows bundle ships no silero-vad, so VadCapture()
+            # raises SystemExit there. Unguarded, a stray double-tap of the PTT
+            # key - a documented gesture the hotkey banner advertises - took the
+            # whole daemon down and killed plain dictation with it. Degrade to
+            # "hands-free unavailable" and keep push-to-talk working.
+            if vad is None and not vad_unavailable:
+                try:
+                    from laris.audio_capture import VadCapture
+                    vad = VadCapture()
+                except (Exception, SystemExit) as exc:  # noqa: BLE001
+                    vad_unavailable = True
+                    print(
+                        f"[Voice] hands-free unavailable ({exc}); "
+                        "push-to-talk keeps working. Hold the key to dictate."
+                    )
             if vad is None:
-                from laris.audio_capture import VadCapture
-                vad = VadCapture()
+                # leave it set and _wait_for_ptt hands it straight back to us
+                ptt.hands_free.clear()
+                continue
             _run_hands_free_session(vad, stt, type_text, overlay, voice_queue, pressed, ducker=ducker)
             continue
 

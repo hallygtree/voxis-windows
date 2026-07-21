@@ -4,6 +4,14 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+# Shutdown contract between `miris stop` and the detached recorder: the CLI
+# creates <session>/stop, the recorder polls for it and exits gracefully.
+# Windows has no deliverable SIGTERM (os.kill is TerminateProcess), so a file
+# both processes agree on is the only portable stop channel. Lives in config
+# so the CLI does not have to import the recorder (numpy/sounddevice) just to
+# learn the filename.
+STOP_SENTINEL = "stop"
+
 DEFAULT_TOML = """\
 vault_root = "~/vault"
 inbox = "inbox"
