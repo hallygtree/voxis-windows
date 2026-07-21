@@ -81,6 +81,41 @@ def test_transcribe_empty_returns_empty(monkeypatch):
     assert t.transcribe(np.zeros(0, dtype=np.float32), 16000) == ""
 
 
+def _cpu_transcriber(monkeypatch, model):
+    import laris.stt_faster as mod
+    monkeypatch.setattr(mod, "_cuda_available", lambda: False)
+    monkeypatch.setattr(mod, "WhisperModel", lambda *a, **k: model)
+    return mod.FasterWhisperTranscriber()
+
+
+def test_transcribe_with_vad_returns_empty_list_for_empty_audio(monkeypatch):
+    t = _cpu_transcriber(monkeypatch, object())
+    assert t.transcribe_with_vad(np.zeros(0, dtype=np.float32), 16000) == []
+
+
+def test_transcribe_with_vad_enables_the_filter_and_returns_segments(monkeypatch):
+    """miris.transcribe.transcribe_channel consumes these objects by .start /
+    .end / .text - the contract that makes it prefer this over speech_spans."""
+    class Seg:
+        def __init__(self, start, end, text):
+            self.start, self.end, self.text = start, end, text
+
+    captured = {}
+
+    class FakeModel:
+        def transcribe(self, audio, **kw):
+            captured.update(kw)
+            return iter([Seg(0.0, 1.0, "ola"), Seg(1.0, 2.0, "mundo")]), None
+
+    t = _cpu_transcriber(monkeypatch, FakeModel())
+    segments = t.transcribe_with_vad(np.zeros(16000, dtype=np.float32), 16000)
+
+    assert captured["vad_filter"] is True
+    assert [(s.start, s.end, s.text) for s in segments] == [
+        (0.0, 1.0, "ola"), (1.0, 2.0, "mundo")
+    ]
+
+
 @pytest.mark.slow
 def test_real_cpu_transcription_smoke():
     """Downloads the real model once and transcribes 1s of a sine sweep -
