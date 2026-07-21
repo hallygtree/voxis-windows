@@ -35,9 +35,9 @@ NOISE_REDUCTION: str = _setting("NOISE_REDUCTION", _DEFAULT_NOISE_REDUCTION)  # 
 # Revert with STT_MODEL=mlx-community/whisper-large-v3-turbo if quality dips.
 STT_MODEL: str = _setting("STT_MODEL", "mlx-community/whisper-large-v3-turbo-q4")
 # faster-whisper model id for the Windows/Linux backend (a plain size name,
-# not the mlx repo id STT_MODEL holds). "small" balances pt-BR quality and
-# CPU latency; drop to "base" on slow machines.
-STT_MODEL_FASTER: str = _setting("STT_MODEL_FASTER", "small")
+# not the mlx repo id STT_MODEL holds). "large" matches macOS (mlx-community/
+# whisper-large-v3-turbo-q4). Performance can be optimized later.
+STT_MODEL_FASTER: str = _setting("STT_MODEL_FASTER", "large")
 # empty string = Whisper auto-detect per utterance (used by miris for
 # bilingual meetings); laris dictation keeps the pt-BR lock by default
 STT_LANGUAGE: str = os.environ.get("STT_LANGUAGE", "pt")
