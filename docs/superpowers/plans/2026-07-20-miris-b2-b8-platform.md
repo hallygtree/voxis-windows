@@ -201,6 +201,21 @@ depende_de: nenhum (coordenar com SDD-Tray)
     agrupar demais, ajustar `vad_parameters` (`min_silence_duration_ms`,
     `threshold`) na chamada de `transcribe_with_vad` em
     `packages/laris/laris/stt_faster.py`.
+- **Resample no macOS trocou de implementação (2026-07-20).** Para tirar o torch
+  do caminho quente, `load_wav_mono16k` deixou de usar `torchaudio.functional.
+  resample` e passou a usar `miris.audio.resample_to_16k` (numpy, média de
+  blocos) — em **ambas** as plataformas. O macOS precisa desse caminho: o
+  `audiotap.swift` grava `system.wav` na taxa nativa do dispositivo
+  (`mSampleRate: asbd.mSampleRate`, tipicamente 48 kHz), então remover o
+  resample teria feito toda reunião no macOS perder o canal do sistema em
+  silêncio (`build_transcript` engole erro por canal).
+  Resposta medida do filtro boxcar de 3 taps no 48k→16k: −0.1 dB @1 kHz,
+  −0.9 dB @4 kHz, −3.9 dB @8 kHz, null em 16 kHz, −14.9 dB @20 kHz. Adequado
+  para STT (a banda que importa para o Whisper fica abaixo de 4 kHz) e muito
+  melhor que a decimação sem filtro que estava no loopback, mas mais fraco que
+  o sinc janelado do torchaudio. *Não validado em macOS* — não há macOS nesta
+  máquina. Se aparecer degradação de transcrição no macOS, é o primeiro
+  suspeito.
 - Sentinela vs pid: garantir ordem — `cmd_stop` cria o sentinela e só então espera
   o pid sumir; corrida se o recorder ainda não escreveu o pid.
 - Detach frozen: `DETACHED_PROCESS` sem console pode engolir stderr do recorder;
