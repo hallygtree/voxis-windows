@@ -113,3 +113,25 @@ depende_de: nenhum
   sessões; documentar. O guard read-only impede que o tray "conserte" errado.
 - Ordem de dependência: o teste de fumaça do miris só passa com o bundle engine-miris
   (SDD-B2..B8) presente; até lá, o fallback de miris_bin evita crash.
+
+### Estado após a varredura de 2026-07-20 (B5/B6/A2 implementados)
+
+- **Nada de Rust foi compilado.** Não há toolchain Rust na máquina de dev: B5, B6 e
+  A2 foram escritos e revisados por leitura, e o `cargo test` do CI (3 plataformas)
+  é o primeiro compilador a vê-los. Todo o código novo de B5 é `#[cfg(windows)]`,
+  ou seja, macOS/Linux verdes não provam nada sobre ele.
+- Decisão B5: externs `kernel32` próprios em vez de `windows-sys`. Menor superfície
+  (zero deps novas) e, sem compilador local, o ABI C fixo é mais seguro que nomes de
+  feature e o tipo `HANDLE`, que mudaram entre 0.48/0.52/0.59 do windows-sys.
+  Máscara de acesso `SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION` — SYNCHRONIZE
+  é obrigatório para o `WaitForSingleObject`, e é a mesma máscara de
+  `miris/cli.py::_pid_alive`. Se um lado mudar, mude o outro.
+- Desvio deliberado em B6: a resolução é `settings::effective_miris_bin`, pura e
+  testada em todas as plataformas, e um `miris_bin` de tray.json **que existe** vence
+  o bundle (override explícito do usuário não pode ser ignorado em silêncio). O SDD
+  original mandava o bundle vencer sempre. Na prática dá no mesmo no Windows
+  empacotado, onde `~/.local/bin/miris` não existe.
+- **Lacuna de cobertura conhecida:** `LarisDaemon::spawn/stop` só tem teste de
+  lifecycle em `#[cfg(unix)]` (usa shell script como binário falso). O caminho
+  Windows de A2 (kill imediato) não tem teste automatizado — só
+  `voxis-verify-windows` prova que o toggle-off deixou de congelar.
