@@ -81,30 +81,49 @@ def cmd_start(cfg: config.Config) -> None:
     # own stdio for the recorder: inheriting the CLI's pipes would keep them
     # open for the whole recording, deadlocking any caller that reads them
     # (the VOXIS tray collects this CLI's output)
-    with (session / "recorder.log").open("ab") as log:
+    log_path = session / "recorder.log"
+    with log_path.open("ab") as log:
         if getattr(sys, "frozen", False):
-            # Frozen executable: use __recorder subcommand with platform-specific detach
-            if sys.platform == "win32":
-                # Windows: CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
-                subprocess.Popen([sys.executable, "__recorder", str(session)],
-                                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                 creationflags=0x00000200 | 0x00000008)
-            else:
-                # macOS: use start_new_session
-                subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session)],
-                                 start_new_session=True, stdin=subprocess.DEVNULL,
-                                 stdout=log, stderr=log)
+            # Frozen: there is no `-m miris.recorder` to run, sys.executable is
+            # the bundle itself, so re-enter through the internal subcommand
+            # that entry.py dispatches. This holds on every frozen platform,
+            # not just Windows.
+            argv = [sys.executable, "__recorder", str(session)]
         else:
-            # Unfrozen (development): use -m miris.recorder with start_new_session
-            subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session)],
-                             start_new_session=True, stdin=subprocess.DEVNULL,
-                             stdout=log, stderr=log)
+            argv = [sys.executable, "-m", "miris.recorder", str(session)]
+        if sys.platform == "win32":
+            kwargs = {"creationflags": 0x00000200 | 0x00000008}  # NEW_GROUP|DETACHED
+        else:
+            kwargs = {"start_new_session": True}
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log, **kwargs)
     for _ in range(50):
         if (session / "recorder.pid").exists():
             print(f"recording -> {session}")
             return
         time.sleep(0.1)
-    sys.exit("recorder did not start (check mic / system-audio permissions)")
+    sys.exit(_start_failure_message(log_path))
+
+
+def _start_failure_message(log_path: Path) -> str:
+    """Explain why the recorder never came up, using what it actually logged.
+
+    DETACHED_PROCESS gives the recorder no console, and the frozen build is
+    windowed, so its stderr exists only in recorder.log. Blaming microphone
+    permissions while an ImportError sits unread in that file is how this
+    project loses afternoons - quote the log instead of guessing.
+    """
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError as exc:
+        tail = f"(could not read {log_path}: {exc})"
+    if not tail:
+        return (f"recorder did not start and logged nothing to {log_path}. "
+                "It died before Python got going - usually a missing DLL or a "
+                "broken bundle. Check mic / system-audio permissions too.")
+    lines = tail.splitlines()[-15:]
+    return ("recorder did not start; last lines of "
+            f"{log_path}:\n" + "\n".join(lines))
 
 
 def cmd_stop(cfg: config.Config) -> None:

@@ -5,6 +5,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from miris.config import Config, STOP_SENTINEL
 from miris import cli
 
@@ -62,6 +64,39 @@ def test_live_session_cleans_stale_pid(tmp_path):
     (session / "recorder.pid").write_text("999999999")
     assert cli._live_session(cfg) == (None, None)
     assert not (session / "recorder.pid").exists()
+
+
+def test_cmd_start_reports_what_the_recorder_logged_when_it_dies(tmp_path, monkeypatch):
+    """Armadilha nº1: the recorder is detached and the frozen build is
+    windowed, so its traceback exists only in recorder.log. Blaming microphone
+    permissions while an ImportError sits unread in that file is the failure
+    mode this project keeps paying for."""
+    cfg = _cfg(tmp_path)
+
+    def fake_popen(args, **kwargs):
+        Path(args[-1]).joinpath("recorder.log").write_text(
+            "Traceback (most recent call last):\n"
+            "ModuleNotFoundError: No module named 'soundcard'\n",
+            encoding="utf-8")
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)  # don't wait 5s
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.cmd_start(cfg)
+    message = str(excinfo.value)
+    assert "ModuleNotFoundError" in message
+    assert "recorder.log" in message
+
+
+def test_cmd_start_says_so_when_the_log_is_empty(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda args, **kw: None)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.cmd_start(cfg)
+    assert "logged nothing" in str(excinfo.value)
 
 
 def _live_session_dir(cfg, pid="4242"):
