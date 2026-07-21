@@ -61,7 +61,7 @@ pub async fn get_settings(app: AppHandle) -> SettingsPayload {
     let laris_alive = peer.as_ref().map(|p| laris::alive(&p.url)).unwrap_or(false);
     let theme = peer
         .filter(|_| laris_alive)
-        .and_then(|p| laris::get_theme(&p).ok())
+        .and_then(|p| laris::get_theme(&p, None, None).ok())
         .and_then(|mut body| body.get_mut("theme").map(serde_json::Value::take));
     SettingsPayload {
         laris: settings::read_json_map(&settings::laris_settings_path()),
@@ -128,8 +128,17 @@ pub fn show_settings_window(app: &AppHandle) {
         let _ = w.set_focus();
         return;
     }
-    let _ = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::default())
+    let mut builder = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::default())
         .title("VOXIS - Configurações")
         .inner_size(560.0, 680.0)
-        .build();
+        .center()
+        .min_inner_size(480.0, 520.0)
+        .theme(None);
+
+    #[cfg(windows)]
+    {
+        builder = builder.initialization_script("document.documentElement.classList.add('plat-windows');");
+    }
+
+    let _ = builder.build();
 }

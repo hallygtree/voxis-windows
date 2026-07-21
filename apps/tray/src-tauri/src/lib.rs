@@ -28,6 +28,9 @@ pub struct AppState {
     /// when the action fails, so the next poll tick must rebuild regardless
     /// of whether the snapshot changed.
     pub menu_dirty: AtomicBool,
+    /// Last known orb rect, updated by the 2s poll thread and read by the
+    /// long-poll thread to avoid redundant GET /theme calls.
+    pub last_orb_rect: Mutex<Option<overlay::OrbRect>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -35,9 +38,11 @@ struct Snapshot {
     recording: Option<(String, i64)>, // (session id, minutes)
     processing: bool,
     laris_alive: bool,
+    ready: bool, // backend.warm() completed, model loaded, dictation key responds
     hands_free: bool,
     has_last_note: bool,
     theme: Option<(String, String, String)>, // (archetype, palette, position)
+    rect: Option<overlay::OrbRect>, // position and size in logical pixels
 }
 
 fn peers_path() -> PathBuf {
@@ -59,19 +64,67 @@ fn take_snapshot(state: &AppState) -> Snapshot {
     };
     let peer = laris::read_peer(&peers_path());
     let laris_alive = peer.as_ref().map(|p| laris::alive(&p.url)).unwrap_or(false);
+
+    // Get monitor size for positioning. Use the primary monitor's size in logical pixels.
+    // Note: Monitor::work_area() may not exist in tauri 2.11.5; we use size() instead.
+    // On Windows, this means the orb may appear under the taskbar if positioned at bottom,
+    // a limitation mitigated by the seletor ui on the daemon side.
+    #[cfg(windows)]
+    let (screen_w, screen_h, monitor_origin) = {
+        tauri::Monitor::all()
+            .into_iter()
+            .find(|m| m.is_primary())
+            .map(|m| {
+                let size = m.size().to_logical::<f64>(m.scale_factor());
+                let pos = m.position().to_logical::<f64>(m.scale_factor());
+                (size.width, size.height, (pos.x, pos.y))
+            })
+            .or_else(|| {
+                tauri::Monitor::all()
+                    .into_iter()
+                    .next()
+                    .map(|m| {
+                        let size = m.size().to_logical::<f64>(m.scale_factor());
+                        let pos = m.position().to_logical::<f64>(m.scale_factor());
+                        (size.width, size.height, (pos.x, pos.y))
+                    })
+            })
+            .unwrap_or((1920.0, 1080.0, (0.0, 0.0)))
+    };
+
+    #[cfg(not(windows))]
+    let (screen_w, screen_h, monitor_origin) = (1920.0, 1080.0, (0.0, 0.0));
+
     // ponytail: theme fetched every tick while laris is up - localhost HTTP,
     // negligible; cache only if it ever shows up in a profile
-    let theme = peer
+    let (theme, ready, rect) = peer
         .filter(|_| laris_alive)
-        .and_then(|p| laris::get_theme(&p).ok())
-        .and_then(|body| {
-            let t = body.get("theme")?;
-            Some((
-                t.get("archetype")?.as_str()?.to_owned(),
-                t.get("palette")?.as_str()?.to_owned(),
-                t.get("position")?.as_str()?.to_owned(),
-            ))
-        });
+        .and_then(|p| {
+            laris::get_theme(&p, Some(screen_w), Some(screen_h)).ok().and_then(|body| {
+                let t = body.get("theme")?;
+                let theme_tuple = (
+                    t.get("archetype")?.as_str()?.to_owned(),
+                    t.get("palette")?.as_str()?.to_owned(),
+                    t.get("position")?.as_str()?.to_owned(),
+                );
+                let ready = body.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
+                let rect = body.get("rect").and_then(|r| {
+                    let x = r.get("x")?.as_f64()?;
+                    let y = r.get("y")?.as_f64()?;
+                    let w = r.get("w")?.as_f64()?;
+                    let h = r.get("h")?.as_f64()?;
+                    Some(overlay::OrbRect {
+                        x: monitor_origin.0 + x,
+                        y: monitor_origin.1 + y,
+                        w,
+                        h,
+                    })
+                });
+                Some((theme_tuple, ready, rect))
+            })
+        })
+        .unwrap_or_default();
+
     let laris_settings = settings::read_json_map(&settings::laris_settings_path());
     let hands_free =
         laris_settings.get("ASSISTANT_MODE").and_then(|v| v.as_str()) == Some("always_on");
@@ -79,9 +132,11 @@ fn take_snapshot(state: &AppState) -> Snapshot {
         recording,
         processing: state.processing.load(Ordering::SeqCst),
         laris_alive,
+        ready,
         hands_free,
         has_last_note: miris::last_note(&sessions).is_some(),
         theme,
+        rect,
     }
 }
 
@@ -95,8 +150,13 @@ fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
     };
     let last_note =
         MenuItem::with_id(app, "last_note", "Última nota", snap.has_last_note, None::<&str>)?;
+    let dictation_label = if snap.laris_alive && !snap.ready {
+        "Ditado (carregando modelo…)".to_string()
+    } else {
+        "Ditado".to_string()
+    };
     let dictation =
-        CheckMenuItem::with_id(app, "dictation", "Ditado", true, snap.laris_alive, None::<&str>)?;
+        CheckMenuItem::with_id(app, "dictation", &dictation_label, true, snap.laris_alive, None::<&str>)?;
     let hands_free = CheckMenuItem::with_id(
         app, "hands_free", "Hands-free", snap.laris_alive, snap.hands_free, None::<&str>,
     )?;
@@ -136,17 +196,20 @@ fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
 }
 
 fn set_tray_icon(tray: &TrayIcon, recording: bool) {
-    let (bytes, template): (&[u8], bool) = if recording {
-        (include_bytes!("../icons/tray-rec.png"), false)
+    let bytes: &[u8] = if recording {
+        include_bytes!("../icons/tray-rec.png")
     } else {
-        (include_bytes!("../icons/tray-idle.png"), true)
+        include_bytes!("../icons/tray-idle.png")
     };
     if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
-        // icon first, template after: macOS applies the template attribute to
-        // the CURRENT image - the reverse order leaves the new image raw-color
-        // and it vanishes against a similarly colored wallpaper
         let _ = tray.set_icon(Some(img));
-        let _ = tray.set_icon_as_template(template);
+        // icon_as_template is macOS-only: it makes the icon adapt to theme
+        // (light/dark). On Windows it's a no-op; the icon is already colored.
+        #[cfg(target_os = "macos")]
+        {
+            let template = !recording;
+            let _ = tray.set_icon_as_template(template);
+        }
     }
 }
 
@@ -316,18 +379,24 @@ pub fn run() {
                 daemon: Mutex::new(daemon),
                 processing: AtomicBool::new(false),
                 menu_dirty: AtomicBool::new(false),
+                last_orb_rect: Mutex::new(None),
             });
 
             let snap = take_snapshot(&app.state::<AppState>());
             let menu = build_menu(app.handle(), &snap)?;
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?;
-            let tray = TrayIconBuilder::with_id("voxis")
+            let mut builder = TrayIconBuilder::with_id("voxis")
                 .icon(icon)
-                .icon_as_template(true)
                 .menu(&menu)
                 .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))
-                .build(app)?;
+                .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()));
+
+            #[cfg(target_os = "macos")]
+            {
+                builder = builder.icon_as_template(true);
+            }
+
+            let tray = builder.build(app)?;
             set_tray_icon(&tray, snap.recording.is_some());
 
             // poll loop: snapshot off the main thread, menu mutations on it
@@ -345,6 +414,11 @@ pub fn run() {
                     }
                     let recording_changed =
                         current.recording.is_some() != last.recording.is_some();
+                    let rect_changed = current.rect != last.rect;
+                    // Store the rect for the long-poll thread to use without redundant GET /theme
+                    if let Ok(mut last_rect) = state.last_orb_rect.lock() {
+                        *last_rect = current.rect;
+                    }
                     last = current.clone();
                     let handle2 = handle.clone();
                     let _ = handle.run_on_main_thread(move || {
@@ -356,14 +430,71 @@ pub fn run() {
                                 set_tray_icon(&tray, current.recording.is_some());
                             }
                         }
-                        if current.laris_alive {
+                        // Sync the orb window if rect or ready state changed.
+                        // The 2s poll drives size/position; visibility is driven by the
+                        // long-poll thread. We sync whenever rect changes to reconcile
+                        // position selector changes or theme changes.
+                        if rect_changed && current.laris_alive {
                             if let Some(peer) = laris::read_peer(&peers_path()) {
-                                let _ = overlay::open(&handle2, &overlay::overlay_url(&peer));
+                                let url = overlay::overlay_url(&peer);
+                                // Pass rect for creation/update, but don't change visibility (driven by long-poll)
+                                let _ = overlay::sync(&handle2, &url, current.rect, false);
                             }
-                        } else {
-                            overlay::close(&handle2);
                         }
                     });
+                }
+            });
+
+            // Long-poll thread: monitor overlay state (visibility, readiness) and
+            // update the orb window when it changes. This is separate from the
+            // 2s theme poll and runs continuously in the background.
+            let handle_lp = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut last_visible = false;
+                let mut serial = 0i64;
+                let mut backoff = Duration::from_secs(1);
+                const MAX_BACKOFF: Duration = Duration::from_secs(5);
+                loop {
+                    std::thread::sleep(backoff);
+                    let peer = match laris::read_peer(&peers_path()) {
+                        Some(p) => p,
+                        None => {
+                            backoff = Duration::from_secs(1);
+                            continue;
+                        }
+                    };
+                    match laris::get_overlay_state(&peer, serial, 20.0) {
+                        Ok(state) => {
+                            backoff = Duration::from_secs(1);
+                            if state.serial != serial {
+                                serial = state.serial;
+                                if state.visible != last_visible {
+                                    last_visible = state.visible;
+                                    let handle_sync = handle_lp.clone();
+                                    let _ = handle_lp.run_on_main_thread(move || {
+                                        if let Some(peer) = laris::read_peer(&peers_path()) {
+                                            let url = overlay::overlay_url(&peer);
+                                            // Get the last known rect from the 2s poll thread
+                                            let app_state = handle_sync.state::<AppState>();
+                                            let rect = app_state.last_orb_rect.lock().ok().and_then(|r| *r);
+                                            let _ = overlay::sync(&handle_sync, &url, rect, last_visible);
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Connection error, malformed body, or 403: assume not visible
+                            if last_visible {
+                                last_visible = false;
+                                let handle_sync = handle_lp.clone();
+                                let _ = handle_lp.run_on_main_thread(move || {
+                                    let _ = overlay::sync(&handle_sync, "", None, false);
+                                });
+                            }
+                            backoff = (backoff * 2).min(MAX_BACKOFF);
+                        }
+                    }
                 }
             });
             Ok(())

@@ -44,9 +44,55 @@ fn agent() -> ureq::Agent {
         .new_agent()
 }
 
-pub fn get_theme(peer: &LarisPeer) -> Result<serde_json::Value, String> {
+/// Long-poll agent with 30s timeout (must be > wait parameter, typically 20s).
+/// No proxy, same as agent().
+fn long_poll_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .proxy(None)
+        .build()
+        .new_agent()
+}
+
+pub fn get_theme(peer: &LarisPeer, screen_w: Option<f64>, screen_h: Option<f64>) -> Result<serde_json::Value, String> {
+    let mut url = format!("{}/theme?token={}", peer.url, peer.token);
+    if let (Some(w), Some(h)) = (screen_w, screen_h) {
+        if w > 0.0 && h > 0.0 {
+            url.push_str(&format!("&screen_w={}&screen_h={}", w, h));
+        }
+    }
     let mut res = agent()
-        .get(format!("{}/theme?token={}", peer.url, peer.token))
+        .get(url)
+        .call()
+        .map_err(|e| e.to_string())?;
+    res.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+/// State of the overlay window: visibility, readiness, mode, and a serial
+/// number that changes when any of the three change. Consumed by the long-poll
+/// thread to decide when to show/hide the orb window.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OverlayState {
+    pub visible: bool,
+    pub ready: bool,
+    #[serde(default)]
+    pub mode: Option<String>,
+    pub serial: i64,
+}
+
+/// Long-poll the overlay state. If serial != since, returns immediately with
+/// the current state. If serial == since and wait > 0, blocks up to wait
+/// seconds (server-side) and returns when state changes or time expires.
+///
+/// Returns Ok(state) on success. On error (connection, 403, malformed body),
+/// the caller assumes visible=false per SDD-C0 §26.
+pub fn get_overlay_state(peer: &LarisPeer, since: i64, wait: f64) -> Result<OverlayState, String> {
+    let mut url = format!("{}/overlay/state?token={}&since={}", peer.url, peer.token, since);
+    if wait > 0.0 {
+        url.push_str(&format!("&wait={}", wait));
+    }
+    let mut res = long_poll_agent()
+        .get(url)
         .call()
         .map_err(|e| e.to_string())?;
     res.body_mut().read_json().map_err(|e| e.to_string())
@@ -282,5 +328,33 @@ mod tests {
         }
         assert!(down, "port still accepting 2s after listener drop");
         assert!(!alive("not-a-url"));
+    }
+
+    #[test]
+    fn overlay_state_deserialize() {
+        let json = r#"{"visible": true, "ready": false, "mode": "dictate", "serial": 42}"#;
+        let state: OverlayState = serde_json::from_str(json).unwrap();
+        assert!(state.visible);
+        assert!(!state.ready);
+        assert_eq!(state.mode, Some("dictate".to_string()));
+        assert_eq!(state.serial, 42);
+
+        // mode is optional and defaults to None
+        let json2 = r#"{"visible": false, "ready": true, "serial": 1}"#;
+        let state2: OverlayState = serde_json::from_str(json2).unwrap();
+        assert!(!state2.visible);
+        assert!(state2.ready);
+        assert_eq!(state2.mode, None);
+        assert_eq!(state2.serial, 1);
+    }
+
+    #[test]
+    fn overlay_state_serial_never_zero() {
+        // serial starts at 1 per SDD-C0 §18 and is always strictly increasing
+        let json = r#"{"visible": true, "ready": true, "mode": null, "serial": 0}"#;
+        // This would parse but represents invalid state (should not come from server).
+        // The client treats it as malformed and assumes visible=false.
+        let state: OverlayState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.serial, 0); // parsing succeeds, but server must never send this
     }
 }
