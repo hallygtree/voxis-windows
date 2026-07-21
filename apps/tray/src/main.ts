@@ -182,4 +182,9 @@ function bind() {
   };
 }
 
-load().then(bind).catch((e) => feedback(String(e), true));
+load()
+  .then(bind)
+  .catch((e) => feedback(String(e), true))
+  .finally(() => {
+    document.documentElement.classList.remove("loading");
+  });

@@ -1,10 +1,29 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" class="loading">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VOXIS - Configurações</title>
     <link rel="stylesheet" href="/src/styles.css" />
+    <style>
+      html.loading main { display: none; }
+      html.loading body::after {
+        content: '';
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 32px;
+        height: 32px;
+        border: 2px solid rgba(0, 122, 255, 0.2);
+        border-top-color: rgba(0, 122, 255, 0.8);
+        border-radius: 50%;
+        animation: spinner 0.8s linear infinite;
+      }
+      @keyframes spinner {
+        to { transform: translate(-50%, -50%) rotate(360deg); }
+      }
+    </style>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
@@ -12,7 +31,9 @@
       <section id="ditado">
         <h2>Ditado</h2>
         <label>Tecla de ativação
-          <select id="dictate-key"></select>
+          <div class="select-wrapper">
+            <select id="dictate-key"></select>
+          </div>
         </label>
         <label>Hands-free por padrão
           <input type="checkbox" id="hands-free" />
@@ -21,10 +42,12 @@
           <input type="text" id="stt-model" spellcheck="false" />
         </label>
         <label>Redução de ruído
-          <select id="noise">
-            <option value="on">Ligada</option>
-            <option value="off">Desligada</option>
-          </select>
+          <div class="select-wrapper">
+            <select id="noise">
+              <option value="on">Ligada</option>
+              <option value="off">Desligada</option>
+            </select>
+          </div>
         </label>
         <p class="hint">Salvar reinicia o daemon de ditado se ele estiver ativo.</p>
         <button id="save-laris">Salvar ditado</button>
@@ -51,20 +74,26 @@
         <h2>Orb</h2>
         <p class="hint" id="orb-offline" hidden>Ditado desligado - ligue-o para ajustar o orb.</p>
         <label>Arquétipo
-          <select id="orb-archetype">
-            <option>waveform</option><option>reactor</option><option>faceted</option>
-          </select>
+          <div class="select-wrapper">
+            <select id="orb-archetype">
+              <option>waveform</option><option>reactor</option><option>faceted</option>
+            </select>
+          </div>
         </label>
         <label>Paleta
-          <select id="orb-palette">
-            <option>blade</option><option>noir</option><option>acid</option><option>ember</option>
-          </select>
+          <div class="select-wrapper">
+            <select id="orb-palette">
+              <option>blade</option><option>noir</option><option>acid</option><option>ember</option>
+            </select>
+          </div>
         </label>
         <label>Posição
-          <select id="orb-position">
-            <option>center</option><option>top-left</option><option>top-center</option>
-            <option>top-right</option><option>bottom-left</option><option>bottom-right</option>
-          </select>
+          <div class="select-wrapper">
+            <select id="orb-position">
+              <option>center</option><option>top-left</option><option>top-center</option>
+              <option>top-right</option><option>bottom-left</option><option>bottom-right</option>
+            </select>
+          </div>
         </label>
         <label>Tamanho (80-400)
           <input type="number" id="orb-size" min="80" max="400" step="10" />

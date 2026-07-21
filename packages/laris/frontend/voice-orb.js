@@ -60,6 +60,35 @@
     finally { fetchInFlight = false; }
   }
 
+  // --- lazy three.js loading ---
+  const THEMES_WITH_THREE = ["faceted"];
+  let threeLoadPromise = null;
+
+  function loadThreeJS() {
+    if (window.THREE) return Promise.resolve();
+    if (threeLoadPromise) return threeLoadPromise;
+
+    threeLoadPromise = new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "/static/vendor/three.min.js";
+      script.onload = resolve;
+      script.onerror = resolve;  // fail gracefully, keep waveform
+      document.head.appendChild(script);
+    });
+
+    return threeLoadPromise;
+  }
+
+  const originalMountTheme = mountTheme;
+  mountTheme = function mountThemeWithThree() {
+    const needsThree = THEMES_WITH_THREE.includes(theme.archetype);
+    if (needsThree && !window.THREE) {
+      loadThreeJS().then(() => originalMountTheme());
+    } else {
+      originalMountTheme();
+    }
+  };
+
   // --- voice state (ported ballistics: attack .55, release .10, pulse .88) ---
   let t = 0, targetEnergy = 0, smoothedVoice = 0, activationPulse = 0;
   let active = false, idleFrameSkip = 0;
@@ -115,14 +144,42 @@
       }, 100);
       return;
     }
-    const ws = new WebSocket(`ws://${window.location.host}/ws/voice?token=${encodeURIComponent(token)}`);
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.error) return;
-      targetEnergy = data.amplitude;
-      setPhase(data.phase);
-    };
-    ws.onclose = () => setPhase("idle");
+
+    let socketCurrent = null;
+    let reconnectDelay = 500;
+    let reconnectTimeout = null;
+
+    function attemptConnect() {
+      try {
+        socketCurrent = new WebSocket(`ws://${window.location.host}/ws/voice?token=${encodeURIComponent(token)}`);
+        reconnectDelay = 500;  // reset backoff on successful connection
+        socketCurrent.onopen = () => {
+          // connection established, reset delay for next reconnect
+          if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        };
+        socketCurrent.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.error) return;
+          targetEnergy = data.amplitude;
+          setPhase(data.phase);
+        };
+        socketCurrent.onclose = (event) => {
+          // only schedule reconnection if this is the current socket
+          if (event.target === socketCurrent) {
+            setPhase("idle");
+            reconnectTimeout = setTimeout(attemptConnect, reconnectDelay);
+            reconnectDelay = Math.min(5000, reconnectDelay * 2);
+          }
+        };
+      } catch (e) {
+        // network error during connect, retry with backoff
+        setPhase("idle");
+        reconnectTimeout = setTimeout(attemptConnect, reconnectDelay);
+        reconnectDelay = Math.min(5000, reconnectDelay * 2);
+      }
+    }
+
+    attemptConnect();
   }
 
   fetchTheme().then(() => { if (!instance) mountTheme(); });

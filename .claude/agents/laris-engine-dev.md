@@ -11,36 +11,45 @@ torch-free via PyInstaller e correção do backend Windows.
 Aplique a skill `voxis-token-lean`: prefixe `rtk git`/`rtk grep` nos comandos
 de terminal, leituras visadas, sem recolar log inteiro de build.
 
+## Sua fronteira dentro de `packages/laris/`
+
+Você é dono do **Python** e do **packaging**. Você **não** edita
+`packages/laris/frontend/**` (a página do orb: `overlay.html`, `voice-orb.js`,
+`themes/*.js`) — isso é do `voxis-ui-dev`. O `server.py` que *serve* esses
+arquivos é seu; o conteúdo deles não é.
+
 ## Contexto já validado (não rederive)
 
-- Causa-raiz do ditado quebrado no Windows: `packages/laris/packaging/laris.spec`
-  usa `pathex=[".."]`, que resolve para `packages/` (não contém `laris/`) —
-  o pacote `laris` nunca é empacotado, `entry.py` faz
-  `from laris.__main__ import main` e morre com `ModuleNotFoundError` em
-  silêncio (`console=False`).
-- Fix: `pathex=[str(Path(SPECPATH).parent)]` + `sys.path.insert(0, ...)` no
-  topo do spec + `hiddenimports += collect_submodules("laris")`. No CI
-  (`.github/workflows/tray-build.yml`), adicionar `pip install -e .` antes do
-  `pyinstaller` (belt-and-suspenders).
-- O resto da stack Windows já está correto e verificado: `platform/windows.py`
-  (WindowsBackend), `config.py` (defaults `DICTATE_KEY="shift_r"`,
-  `NOISE_REDUCTION="off"`, `STT_MODEL_FASTER="small"`), `hotkey.py` (pynput,
-  `Key.shift_r` existe no Windows), `audio_capture.py`/`server.py`/
-  `peer_discovery.py`/`orb_theme.py` (import-clean, imports pyobjc/mlx são
-  lazy). `config_dir` bate entre Rust e Python (`~/.config/voice-at`).
-- Pendências conhecidas além do fix crítico:
-  - Encerramento do engine no Windows (`apps/tray/src-tauri/src/laris.rs`,
-    `LarisDaemon::stop`) só tem caminho `#[cfg(unix)]`; no Windows cai em
-    `child.kill()` após esperar 3s — freeze desnecessário. Fix é do
-    `tray-dev`, mas você deve saber que existe (afeta como testa o toggle).
-  - UI de settings (`apps/tray/src/main.ts` ~58-62): fallback de
-    `DICTATE_KEY` é `"cmd_r"` (não existe no Windows, devia ser `shift_r`);
-    campo de modelo mostra `STT_MODEL` (mlx) mas `FasterWhisperTranscriber`
-    lê `STT_MODEL_FASTER` — requer expor `STT_MODEL_FASTER` em
-    `laris/settings.py::KNOWN_KEYS` e em
-    `apps/tray/src-tauri/src/commands.rs::KNOWN_LARIS_KEYS`/`valid_value`.
-    Essa parte é compartilhada com `tray-dev` (Rust) — coordene, não edite
-    `src-tauri/**` sozinho.
+**O bug A1 está corrigido e verificado.** `laris.spec` usa
+`pathex=[str(Path(SPECPATH).parent)]` + `sys.path.insert(0, ...)` +
+`hiddenimports += collect_submodules("laris")`, e o CI faz `pip install -e .`
+antes do `pyinstaller`. Provado reconstruindo o engine congelado: 30 módulos
+`laris` no PYZ. **Não reabra isso.**
+
+Atenção ao inspecionar bundle: **não** procure um diretório `_internal/laris/`
+— ele não existe. Com `noarchive=False` o Python puro é arquivado em
+`PYZ-00.pyz` dentro do exe; só extensões nativas ficam soltas em `_internal/`.
+
+**Estado atual da stack Windows** (tudo verificado, 174 testes passando):
+`platform/windows.py` (WindowsBackend), `hotkey.py` (pynput, `Key.shift_r`),
+`audio_capture.py`, `server.py`, `peer_discovery.py`, `orb_theme.py`.
+`config_dir` bate entre Rust e Python (`~/.config/voice-at`).
+
+Defaults em `config.py`: `DICTATE_KEY="shift_r"`, `NOISE_REDUCTION="off"`,
+e **`STT_MODEL_FASTER="large"`** — mudou de `"small"` em 2026-07-21 por decisão
+do usuário, para paridade de qualidade com o `whisper-large-v3-turbo-q4` do
+macOS. Isso tornou o `warm()` muito mais lento (dezenas de segundos em CPU
+int8), o que é relevante para qualquer coisa que dependa de boot.
+
+**Armadilhas já pagas, não repita:**
+- `_cuda_available()` só prova que há driver NVIDIA, **não** que cuBLAS/cuDNN
+  existem. O modelo constrói e só o primeiro `encode()` morre. Por isso
+  `FasterWhisperTranscriber.__init__` faz `_probe()` com inferência real antes
+  de assumir CUDA. Não "simplifique" removendo o probe.
+- Imports pyobjc/mlx são **lazy de propósito**. Mover um para o topo quebra o
+  Windows em silêncio.
+- `stdout` é line-buffered em `entry.py` de propósito: sem isso o traceback
+  aparecia *antes* do banner de boot no log, escondendo mortes do engine.
 
 ## Ao trabalhar
 

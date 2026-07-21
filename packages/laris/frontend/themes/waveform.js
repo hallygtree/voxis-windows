@@ -17,6 +17,9 @@
     const ghosts = [new Array(N).fill(0), new Array(N).fill(0)];
     let ghostClock = 0;
 
+    // Gradient cache by quantized energy, accent, dim
+    const gradientCache = new Map();
+
     function draw(s, pal) {
       ctx.clearRect(0, 0, size, size);
       const dim = s.active ? 1 : 0.75;
@@ -24,10 +27,19 @@
       const glitchShift = s.glitch ? (Math.random() - 0.5) * 4 * S : 0;
 
       const coreR = (6 + s.v * 4) * S;
-      const g = ctx.createRadialGradient(C, C, 1, C, C, coreR * 3.2);
-      g.addColorStop(0, rgba(pal.hot, 0.95 * dim + s.v * 0.05));
-      g.addColorStop(0.4, rgba(pal.accent, 0.30 * dim + s.v * 0.25));
-      g.addColorStop(1, rgba(pal.accent, 0));
+      const quantV = Math.round(s.v * 15);
+      const cacheKey = `${quantV}|${pal.accent}|${pal.hot}|${dim}`;
+
+      let g;
+      if (gradientCache.has(cacheKey)) {
+        g = gradientCache.get(cacheKey);
+      } else {
+        g = ctx.createRadialGradient(C, C, 1, C, C, coreR * 3.2);
+        g.addColorStop(0, rgba(pal.hot, 0.95 * dim + s.v * 0.05));
+        g.addColorStop(0.4, rgba(pal.accent, 0.30 * dim + s.v * 0.25));
+        g.addColorStop(1, rgba(pal.accent, 0));
+        gradientCache.set(cacheKey, g);
+      }
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(C, C, coreR * 3.2, 0, 7); ctx.fill();
 
@@ -70,6 +82,12 @@
       }
     }
 
-    return { draw, dispose() { canvas.remove(); } };
+    return {
+      draw,
+      dispose() {
+        canvas.remove();
+        gradientCache.clear();
+      }
+    };
   };
 })();
