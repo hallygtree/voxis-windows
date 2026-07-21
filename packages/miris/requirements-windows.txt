@@ -9,11 +9,17 @@ sounddevice>=0.4.6
 # Primary choice: soundcard (pure-Python via CFFI, no compilation needed)
 soundcard>=0.4.6
 
-# Transcription via laris (faster-whisper backend, no torch)
-# The laris package should be installed via: pip install -e ../laris
-# Ensure laris is configured for faster-whisper (onnxruntime, not torch/mlx)
-# See: packages/laris/laris/stt_faster.py
-laris
+# Transcription via the sibling laris package (faster-whisper backend, no torch).
+# MUST be the local path: PyPI publishes an unrelated project called "laris"
+# (0.9.3, single-cell bioinformatics), so a bare `laris` here installs the
+# wrong code and drags in anndata/scanpy. The frozen exe would then fail on
+# `from laris.stt_faster import ...` - windowed, i.e. silently.
+-e ../laris
+
+# faster-whisper is what laris.stt_faster imports and what miris.spec runs
+# collect_all() on; pinned here so this file stands alone instead of relying
+# on the laris build step having run first in CI.
+faster-whisper>=1.2.1
 
 # Testing (optional, for development)
 pytest>=8.0.0

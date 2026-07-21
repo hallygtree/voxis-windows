@@ -3,7 +3,12 @@ name = "miris"
 version = "0.1.0"
 description = "Meeting Intelligence Recording & Insight System"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.24.0", "sounddevice>=0.4.6", "laris"]
+# NOTE: laris is deliberately NOT listed here. It is the sibling package at
+# ../laris, not an index package - and PyPI *does* publish an unrelated
+# project called "laris" (0.9.3, single-cell bioinformatics), so declaring it
+# here makes `pip install miris` silently pull the wrong code. Install it
+# from the path instead: see requirements.txt / requirements-windows.txt.
+dependencies = ["numpy>=1.24.0", "sounddevice>=0.4.6"]
 
 [project.scripts]
 miris = "miris.cli:main"
