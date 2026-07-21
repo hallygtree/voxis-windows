@@ -414,7 +414,6 @@ pub fn run() {
                     }
                     let recording_changed =
                         current.recording.is_some() != last.recording.is_some();
-                    let rect_changed = current.rect != last.rect;
                     // Store the rect for the long-poll thread to use without redundant GET /theme
                     if let Ok(mut last_rect) = state.last_orb_rect.lock() {
                         *last_rect = current.rect;
@@ -430,16 +429,20 @@ pub fn run() {
                                 set_tray_icon(&tray, current.recording.is_some());
                             }
                         }
-                        // Sync the orb window if rect or ready state changed.
-                        // The 2s poll drives size/position; visibility is driven by the
-                        // long-poll thread. We sync whenever rect changes to reconcile
-                        // position selector changes or theme changes.
-                        if rect_changed && current.laris_alive {
+                        // The 2s poll owns size/position and the URL; visibility is
+                        // owned by the long-poll thread. sync() is idempotent and
+                        // guards its own change detection, so calling it every tick
+                        // is cheap and is what lets a restarted daemon's new token
+                        // reach the window (the rect alone may not have changed).
+                        if current.laris_alive {
                             if let Some(peer) = laris::read_peer(&peers_path()) {
                                 let url = overlay::overlay_url(&peer);
-                                // Pass rect for creation/update, but don't change visibility (driven by long-poll)
                                 let _ = overlay::sync(&handle2, &url, current.rect, false);
                             }
+                        } else {
+                            // Engine died: tear the window down instead of leaving it
+                            // reconnecting to nothing with a token that is now void.
+                            overlay::close(&handle2);
                         }
                     });
                 }

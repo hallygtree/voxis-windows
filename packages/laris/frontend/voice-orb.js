@@ -149,33 +149,43 @@
     let reconnectDelay = 500;
     let reconnectTimeout = null;
 
+    function scheduleReconnect() {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      reconnectTimeout = setTimeout(attemptConnect, reconnectDelay);
+      reconnectDelay = Math.min(5000, reconnectDelay * 2);
+    }
+
     function attemptConnect() {
       try {
-        socketCurrent = new WebSocket(`ws://${window.location.host}/ws/voice?token=${encodeURIComponent(token)}`);
-        reconnectDelay = 500;  // reset backoff on successful connection
-        socketCurrent.onopen = () => {
-          // connection established, reset delay for next reconnect
-          if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        const socket = new WebSocket(`ws://${window.location.host}/ws/voice?token=${encodeURIComponent(token)}`);
+        socketCurrent = socket;
+        socket.onopen = () => {
+          // O reset do backoff mora aqui, e nao junto do `new WebSocket`: no
+          // construtor ele rodava a cada tentativa, nao a cada sucesso, o que
+          // anulava o crescimento do delay e virava um retry fixo de 500ms.
+          reconnectDelay = 500;
         };
-        socketCurrent.onmessage = (event) => {
+        socket.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          if (data.error) return;
+          if (data.error) {
+            // Token velho: o daemon reiniciou e gerou outro. Recarregar a pagina
+            // nao resolve - o token esta na URL, entao quem hospeda esta janela
+            // (o tray, no Windows) precisa renavegar com a URL nova.
+            console.error("[orb] /ws/voice recusou a conexao:", data.error);
+            return;
+          }
           targetEnergy = data.amplitude;
           setPhase(data.phase);
         };
-        socketCurrent.onclose = (event) => {
-          // only schedule reconnection if this is the current socket
-          if (event.target === socketCurrent) {
-            setPhase("idle");
-            reconnectTimeout = setTimeout(attemptConnect, reconnectDelay);
-            reconnectDelay = Math.min(5000, reconnectDelay * 2);
-          }
+        socket.onclose = () => {
+          if (socket !== socketCurrent) return;  // socket ja substituido
+          setPhase("idle");
+          scheduleReconnect();
         };
       } catch (e) {
-        // network error during connect, retry with backoff
+        console.error("[orb] falha ao abrir /ws/voice:", e);
         setPhase("idle");
-        reconnectTimeout = setTimeout(attemptConnect, reconnectDelay);
-        reconnectDelay = Math.min(5000, reconnectDelay * 2);
+        scheduleReconnect();
       }
     }
 

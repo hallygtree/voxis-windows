@@ -19,13 +19,36 @@ def test_overlay_route_serves_html():
     assert "voice-orb.js" in response.text
 
 
-def test_ws_voice_rejects_missing_token():
+def test_ws_voice_refuses_handshake_without_token():
+    """A bad token must be refused at the handshake, not accepted and then closed.
+
+    Contrato mudou de proposito: antes o servidor aceitava e so entao mandava
+    {"error": ...}. Isso dispara onopen no cliente, que trata como conexao boa e
+    zera o backoff - um orb com token velho (o daemon gera outro a cada boot)
+    reconectava em loop apertado para sempre. Recusando antes do accept, o
+    cliente ve o fracasso e o backoff cresce."""
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+
     from laris.server import build_app
 
     app = build_app(token="test-token")
-    with TestClient(app).websocket_connect("/ws/voice") as ws:
-        data = ws.receive_json()
-        assert "error" in data
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with TestClient(app).websocket_connect("/ws/voice"):
+            pass
+    assert excinfo.value.code == 1008  # policy violation
+
+
+def test_ws_voice_refuses_handshake_with_wrong_token():
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    with pytest.raises(WebSocketDisconnect):
+        with TestClient(app).websocket_connect("/ws/voice?token=token-errado"):
+            pass
 
 
 def test_ws_voice_streams_queued_events():
