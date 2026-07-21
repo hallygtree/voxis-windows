@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-TARGET_SR = 16000
+from miris.audio import TARGET_SR, downmix_to_mono, resample_to_16k
 
 
 @dataclass(frozen=True)
@@ -28,13 +28,15 @@ def load_wav_mono16k(path: Path) -> np.ndarray:
         raise ValueError(f"unsupported sample width {width} in {path}")
     if n_ch > 1:
         audio = audio[: len(audio) - len(audio) % n_ch]  # tolerate truncated WAVs
-        audio = audio.reshape(-1, n_ch).mean(axis=1)
-    if sr != TARGET_SR:
-        import torch
-        import torchaudio.functional as F
-
-        audio = F.resample(torch.from_numpy(audio), sr, TARGET_SR).numpy()
-    return audio
+        audio = downmix_to_mono(audio.reshape(-1, n_ch))
+    # B3: this used to resample via torchaudio, which is not in the torch-free
+    # Windows bundle. Windows capture already writes 16 kHz mono, so that path
+    # never runs there - but the macOS helper writes at the device's native
+    # rate (audiotap.swift takes mSampleRate from the tap format, typically
+    # 48 kHz stereo), so dropping resampling outright would have made every
+    # macOS meeting silently lose its system channel: build_transcript()
+    # swallows per-channel errors and carries on with the other one.
+    return resample_to_16k(audio, sr)
 
 
 def speech_spans(audio: np.ndarray, sr: int = TARGET_SR) -> list[tuple[int, int]]:
