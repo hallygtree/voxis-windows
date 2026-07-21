@@ -1,8 +1,11 @@
 import os
 import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
-from miris.config import Config
+from miris.config import Config, STOP_SENTINEL
 from miris import cli
 
 
@@ -58,4 +61,65 @@ def test_live_session_cleans_stale_pid(tmp_path):
     session.mkdir(parents=True)
     (session / "recorder.pid").write_text("999999999")
     assert cli._live_session(cfg) == (None, None)
+    assert not (session / "recorder.pid").exists()
+
+
+def _live_session_dir(cfg, pid="4242"):
+    session = cfg.sessions_dir / "20260716-1000"
+    session.mkdir(parents=True)
+    (session / "recorder.pid").write_text(pid)
+    return session
+
+
+def test_cmd_stop_shuts_the_recorder_down_through_the_sentinel(tmp_path, monkeypatch):
+    """B2: `miris stop` must ask the recorder to stop by dropping the sentinel
+    and then wait for it to clean up, rather than killing it. On Windows
+    os.kill is TerminateProcess: killing here truncates mic.wav/system.wav."""
+    cfg = _cfg(tmp_path)
+    session = _live_session_dir(cfg)
+    pid_file = session / "recorder.pid"
+
+    monkeypatch.setattr(cli, "_pid_alive", lambda pid: pid_file.exists())
+    signals = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: signals.append(sig))
+    monkeypatch.setattr(cli.pipeline, "process_session",
+                        lambda c, s: s / "note.md")
+
+    def fake_recorder():  # stands in for the detached recorder process
+        for _ in range(200):
+            if (session / STOP_SENTINEL).exists():
+                pid_file.unlink(missing_ok=True)  # its `finally` ran
+                return
+            time.sleep(0.01)
+
+    worker = threading.Thread(target=fake_recorder)
+    worker.start()
+    try:
+        cli.cmd_stop(cfg)
+    finally:
+        worker.join(timeout=5)
+
+    assert (session / STOP_SENTINEL).exists(), "sentinel is the stop channel"
+    assert not pid_file.exists(), "must wait for the recorder to clean up"
+    if sys.platform == "win32":
+        assert signals == [], "os.kill on Windows is TerminateProcess"
+
+
+def test_cmd_stop_force_kills_a_wedged_recorder(tmp_path, monkeypatch):
+    """A recorder that ignores the sentinel must not hang the caller forever -
+    the tray runs `miris stop` synchronously."""
+    cfg = _cfg(tmp_path)
+    session = _live_session_dir(cfg)
+
+    monkeypatch.setattr(cli, "_pid_alive", lambda pid: True)  # never dies
+    monkeypatch.setattr(cli, "STOP_GRACE_S", 0.3)
+    killed = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(cli.pipeline, "process_session",
+                        lambda c, s: s / "note.md")
+
+    started = time.monotonic()
+    cli.cmd_stop(cfg)
+    assert time.monotonic() - started < 5, "must give up instead of blocking"
+    assert killed == [4242]
     assert not (session / "recorder.pid").exists()
