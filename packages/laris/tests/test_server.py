@@ -54,9 +54,20 @@ def test_get_theme_without_screen_dimensions():
     assert "rect" not in data  # No rect when dimensions omitted
 
 
-def test_get_theme_with_valid_screen_dimensions():
-    """Verify that /theme with valid params adds rect in top-left coordinates."""
+def test_get_theme_with_valid_screen_dimensions(monkeypatch):
+    """Verify that /theme with valid params adds rect in top-left coordinates.
+
+    The theme is pinned here on purpose: load_theme() reads the developer's real
+    ~/.config/voice-at/orb-theme.json, so without this the assertion below would
+    depend on whatever position the machine running the tests happens to have
+    selected in the tray."""
+    from laris import orb_theme
     from laris.server import build_app
+
+    monkeypatch.setattr(
+        orb_theme, "load_theme",
+        lambda *a, **k: {**orb_theme.DEFAULTS, "position": "center", "size": 190},
+    )
 
     app = build_app(token="test-token")
     response = TestClient(app).get("/theme?token=test-token&screen_w=1920.0&screen_h=1080.0")
@@ -165,15 +176,22 @@ def test_get_overlay_state_with_injected_orb_state():
     assert data["mode"] is None
 
 
-def test_get_overlay_state_wait_clamped():
-    """Verify that wait parameter is clamped to [0, 25]."""
-    from laris.server import build_app
+def test_get_overlay_state_wait_clamped(monkeypatch):
+    """Verify that an absurd wait is clamped to the server ceiling (SDD-C0 §14).
+
+    MAX_WAIT_S is lowered here so the test proves the clamp without actually
+    sleeping 25 seconds: with wait=999 the call must come back on the ceiling,
+    not on the requested value."""
     import time
 
-    app = build_app(token="test-token")
+    from laris import server as server_mod
+
+    monkeypatch.setattr(server_mod, "MAX_WAIT_S", 0.5)
+
+    app = server_mod.build_app(token="test-token")
     start = time.monotonic()
-    # Request with wait=999 should return in ~25s max
-    response = TestClient(app, timeout=30).get("/overlay/state?token=test-token&since=999&wait=999")
+    response = TestClient(app).get("/overlay/state?token=test-token&since=999&wait=999")
     elapsed = time.monotonic() - start
+
     assert response.status_code == 200
-    assert elapsed < 26  # Should be clamped to 25s
+    assert elapsed < 3.0, f"wait nao foi limitado ao teto: levou {elapsed:.1f}s"

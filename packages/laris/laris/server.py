@@ -26,6 +26,10 @@ def _frontend_dir() -> Path:
 
 FRONTEND_DIR = _frontend_dir()
 
+# Teto do long-poll de /overlay/state (SDD-C0 §14). O cliente deve usar um
+# timeout global de HTTP maior que isto, senão mata a conexão antes da resposta.
+MAX_WAIT_S = 25.0
+
 
 def get_voice_event_queue(app: FastAPI) -> "thread_queue.Queue[VoiceEvent]":
     return app.state.voice_events
@@ -65,8 +69,8 @@ def build_app(token: str, voice_queue: "thread_queue.Queue[VoiceEvent] | None" =
     async def get_overlay_state(token: str | None = None, since: int = 0, wait: float = 0.0):
         if not laris_auth.token_valid(token, app.state.token):
             raise HTTPException(status_code=403, detail="invalid token")
-        # Clamp wait to [0, 25] seconds
-        wait = max(0.0, min(25.0, wait))
+        # Clamp wait to [0, MAX_WAIT_S] (SDD-C0 §14)
+        wait = max(0.0, min(MAX_WAIT_S, wait))
         orb_state = app.state.orb_state
         # Blocking wait must happen in a thread pool to avoid blocking the event loop
         snapshot = await asyncio.to_thread(orb_state.wait_for_change, since, wait)

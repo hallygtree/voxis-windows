@@ -276,7 +276,7 @@ def test_hands_free_unavailable_does_not_kill_the_daemon(monkeypatch, capsys):
         def warm(self): pass
         def transcribe(self, audio, sample_rate): return ""
         def type_text(self, text): pass
-        def make_overlay(self, url): return MagicMock()
+        def make_overlay(self, url, state=None): return MagicMock()
         def make_ducker(self): return MagicMock()
 
     class FakePTT:
