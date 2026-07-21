@@ -177,9 +177,30 @@ depende_de: nenhum (coordenar com SDD-Tray)
 
 ## Riscos
 
-- B3/VAD: o `vad_filter` do faster-whisper muda a granularidade dos `Segment` e o
-  timeline de `merge()`. Validar qualidade em pt-BR/EN e ajustar parâmetros de VAD
-  (min_silence, threshold) se cortar frases.
+- **B3/VAD — RISCO ABERTO, parcialmente resolvido (2026-07-20).**
+  - *Resolvido, com evidência:* o timeline de `merge()` continua coerente. Com
+    `vad_filter=True` o faster-whisper chama `restore_speech_timestamps`
+    (`faster_whisper/transcribe.py:1010`), então `segment.start`/`.end` já vêm
+    na timeline do áudio **original**, em segundos — não em índices de amostra
+    do trecho filtrado. `transcribe_channel` repassa esses valores direto, e há
+    teste cobrindo o mapeamento e a intercalação dos dois canais
+    (`test_transcribe.py::test_transcribe_channel_prefers_builtin_vad_and_keeps_its_timestamps`,
+    `::test_vad_segments_merge_into_a_coherent_two_speaker_timeline`).
+  - *NÃO validado:* a **granularidade**. Os `Segment` do faster-whisper são
+    segmentos do decoder (janelas de até ~30 s, tipicamente por frase), enquanto
+    o silero devolvia spans por elocução. O transcript intercalado fica mais
+    grosso: turnos curtos de "Eles" que caíam entre duas falas de "Eu" podem
+    agora aparecer agrupados fora de ordem de conversa (a ordenação por
+    `start_s` continua correta, a *legibilidade* do diálogo é que muda). Isso é
+    o que o LLM resume, então afeta a nota final.
+  - *Por que não foi validado:* exige áudio real de reunião bilíngue (pt-BR/EN)
+    com dois canais; não há corpus no repo e não dá para sintetizar fala com
+    fidelidade suficiente para julgar corte de frase.
+  - *Como fechar:* rodar o item "Reuniões" da skill `voxis-verify-windows` com
+    uma reunião real e comparar `transcript.md` com o áudio. Se cortar frases ou
+    agrupar demais, ajustar `vad_parameters` (`min_silence_duration_ms`,
+    `threshold`) na chamada de `transcribe_with_vad` em
+    `packages/laris/laris/stt_faster.py`.
 - Sentinela vs pid: garantir ordem — `cmd_stop` cria o sentinela e só então espera
   o pid sumir; corrida se o recorder ainda não escreveu o pid.
 - Detach frozen: `DETACHED_PROCESS` sem console pode engolir stderr do recorder;

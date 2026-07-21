@@ -102,6 +102,73 @@ def test_transcribe_channel_uses_spans_and_transcriber(tmp_path):
     ]
 
 
+class _FWSegment:
+    """Shape of a faster-whisper segment: start/end in seconds, leading-space text."""
+
+    def __init__(self, start, end, text):
+        self.start, self.end, self.text = start, end, text
+
+
+class VadTranscriber:
+    """A transcriber exposing transcribe_with_vad, like FasterWhisperTranscriber."""
+
+    def __init__(self, segments):
+        self._segments = segments
+        self.saw_spans_fn = False
+
+    def transcribe_with_vad(self, audio, sample_rate=16000):
+        return self._segments
+
+
+def test_transcribe_channel_prefers_builtin_vad_and_keeps_its_timestamps(tmp_path):
+    """B3: on Windows the VAD is faster-whisper's own (Silero via onnxruntime),
+    not silero_vad+torch. With vad_filter=True faster-whisper runs
+    restore_speech_timestamps (transcribe.py:1010), so segment.start/.end are
+    already on the original audio's timeline - they must be carried through
+    verbatim, not rescaled as if they were sample indices."""
+    _write_wav(tmp_path / "d.wav", np.zeros(32000, dtype=np.float32), 16000)
+
+    def exploding_spans(audio, sr=16000):
+        raise AssertionError("must not fall back to the torch/silero VAD")
+
+    segs = transcribe.transcribe_channel(
+        tmp_path / "d.wav", "Eles",
+        VadTranscriber([_FWSegment(0.0, 1.4, " Bom dia"),
+                        _FWSegment(2.5, 4.0, " tudo certo")]),
+        spans_fn=exploding_spans)
+
+    assert segs == [
+        Segment(0.0, 1.4, "Eles", "Bom dia"),
+        Segment(2.5, 4.0, "Eles", "tudo certo"),
+    ]
+
+
+def test_transcribe_channel_drops_empty_vad_segments(tmp_path):
+    _write_wav(tmp_path / "e.wav", np.zeros(16000, dtype=np.float32), 16000)
+    segs = transcribe.transcribe_channel(
+        tmp_path / "e.wav", "Eles",
+        VadTranscriber([_FWSegment(0.0, 1.0, "   "),
+                        _FWSegment(1.0, 2.0, " oi")]))
+    assert segs == [Segment(1.0, 2.0, "Eles", "oi")]
+
+
+def test_vad_segments_merge_into_a_coherent_two_speaker_timeline(tmp_path):
+    """The merged transcript is what the LLM summarises, so the two channels'
+    timestamps have to stay comparable after the VAD swap."""
+    _write_wav(tmp_path / "f.wav", np.zeros(16000 * 5, dtype=np.float32), 16000)
+    mine = transcribe.transcribe_channel(
+        tmp_path / "f.wav", "Eu",
+        VadTranscriber([_FWSegment(0.0, 2.0, " oi"),
+                        _FWSegment(65.0, 66.0, " tchau")]))
+    theirs = transcribe.transcribe_channel(
+        tmp_path / "f.wav", "Eles",
+        VadTranscriber([_FWSegment(2.5, 4.0, " olá")]))
+
+    assert transcribe.merge(mine, theirs) == (
+        "[00:00] Eu: oi\n[00:02] Eles: olá\n[01:05] Eu: tchau"
+    )
+
+
 def test_collapse_repetitions_caps_hallucinated_runs():
     text = "essas " + "pessoas " * 200 + "também"
     result = transcribe.collapse_repetitions(text.strip())
