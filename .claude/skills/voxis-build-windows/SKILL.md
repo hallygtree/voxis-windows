@@ -22,8 +22,9 @@ mas invoque explícito mesmo assim.
 
 1. `cd packages/laris && python -m venv .venv && rtk .venv\Scripts\pip install -e . -r requirements.txt pyinstaller`
 2. `rtk pyinstaller packaging/laris.spec --noconfirm`
-3. Conferir `dist/laris-engine/laris-engine.exe` + `_internal/laris/` existe
-   (prova do fix A1 — hoje falta `laris/` no bundle).
+3. Conferir `dist/laris-engine/laris-engine.exe` e que o pacote `laris` está
+   no PYZ (**não** existe `_internal/laris/` — Python puro é arquivado dentro
+   do exe; ver [[voxis-debug-fix]] para o comando de inspeção do PYZ).
 4. Copiar `dist/laris-engine/*` por cima de
    `%LOCALAPPDATA%\VOXIS\engine\` para provar o fix sem esperar CI.
 5. Repetir para `packages/miris/packaging/miris.spec` quando existir.

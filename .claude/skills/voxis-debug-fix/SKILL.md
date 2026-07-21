@@ -46,7 +46,18 @@ Estado no disco que prova se o daemon subiu de verdade:
 | `~/.config/voice-at/laris-engine.log` | traceback aqui ⇒ engine morreu no boot |
 | `~/.config/voice-at/peers.json` | existe + porta viva ⇒ daemon subiu |
 | `~/.config/voice-at/laris-settings.json` | o que a UI realmente persistiu |
-| `%LOCALAPPDATA%\VOXIS\engine\_internal\laris\` | o pacote foi bundlado (fix A1) |
+| PYZ do bundle contém `laris.*` | o pacote foi bundlado (fix A1) |
+
+Atenção: **não** procure um diretório `_internal/laris/` — ele não existe. Com
+`noarchive=False` o Python puro é arquivado no `PYZ-00.pyz` dentro do exe;
+só as extensões nativas ficam soltas em `_internal/`. Para conferir:
+
+```bash
+python -c "from PyInstaller.archive.readers import ZlibArchiveReader; \
+a=ZlibArchiveReader(r'build/laris/PYZ-00.pyz'); \
+print(len([x for x in a.toc if x.startswith('laris')]))"
+```
+(esperado: 30 módulos)
 
 Se o log tem traceback, **pare aqui**: o bug é no engine ou no packaging, não
 na UI, não no hotkey, não no orb. Não investigue as camadas de cima.
