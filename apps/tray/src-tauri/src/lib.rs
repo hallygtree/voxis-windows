@@ -31,6 +31,11 @@ pub struct AppState {
     /// Last known orb rect, updated by the 2s poll thread and read by the
     /// long-poll thread to avoid redundant GET /theme calls.
     pub last_orb_rect: Mutex<Option<overlay::OrbRect>>,
+    /// Whether laris finished backend.warm() and the hotkey actually responds.
+    /// Published by the long-poll thread from /overlay/state, read by
+    /// take_snapshot: uvicorn answers well before the model is loaded, so
+    /// `laris_alive` alone would tell the user dictation is ready too early.
+    pub orb_ready: AtomicBool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -53,7 +58,7 @@ fn sessions_dir(state: &AppState) -> PathBuf {
     PathBuf::from(&state.config.miris_home).join("sessions")
 }
 
-fn take_snapshot(state: &AppState) -> Snapshot {
+fn take_snapshot(app: &tauri::AppHandle, state: &AppState) -> Snapshot {
     let sessions = sessions_dir(state);
     let recording = match miris::status(&sessions) {
         miris::MirisStatus::Recording { session, .. } => {
@@ -65,39 +70,44 @@ fn take_snapshot(state: &AppState) -> Snapshot {
     let peer = laris::read_peer(&peers_path());
     let laris_alive = peer.as_ref().map(|p| laris::alive(&p.url)).unwrap_or(false);
 
-    // Get monitor size for positioning. Use the primary monitor's size in logical pixels.
-    // Note: Monitor::work_area() may not exist in tauri 2.11.5; we use size() instead.
-    // On Windows, this means the orb may appear under the taskbar if positioned at bottom,
-    // a limitation mitigated by the seletor ui on the daemon side.
+    // Screen geometry for the orb rect, in LOGICAL pixels (SDD-C0 §6): laris
+    // computes the rect against whatever dimensions we send, and applying a rect
+    // derived from physical pixels would misplace the orb on any display that is
+    // not at 100% scaling.
+    //
+    // work_area() rather than size(): it excludes the taskbar, so a "bottom-*"
+    // position lands above it instead of behind it. It does exist in tauri 2.11.5
+    // (an earlier comment here claimed otherwise without checking).
     #[cfg(windows)]
     let (screen_w, screen_h, monitor_origin) = {
-        tauri::Monitor::all()
-            .into_iter()
-            .find(|m| m.is_primary())
+        app.primary_monitor()
+            .ok()
+            .flatten()
             .map(|m| {
-                let size = m.size().to_logical::<f64>(m.scale_factor());
-                let pos = m.position().to_logical::<f64>(m.scale_factor());
+                let scale = m.scale_factor();
+                let area = m.work_area();
+                let size = area.size.to_logical::<f64>(scale);
+                let pos = area.position.to_logical::<f64>(scale);
                 (size.width, size.height, (pos.x, pos.y))
-            })
-            .or_else(|| {
-                tauri::Monitor::all()
-                    .into_iter()
-                    .next()
-                    .map(|m| {
-                        let size = m.size().to_logical::<f64>(m.scale_factor());
-                        let pos = m.position().to_logical::<f64>(m.scale_factor());
-                        (size.width, size.height, (pos.x, pos.y))
-                    })
             })
             .unwrap_or((1920.0, 1080.0, (0.0, 0.0)))
     };
 
     #[cfg(not(windows))]
-    let (screen_w, screen_h, monitor_origin) = (1920.0, 1080.0, (0.0, 0.0));
+    let (screen_w, screen_h, monitor_origin) = {
+        let _ = app; // macOS positions its own pyobjc panel; nothing to measure here
+        (1920.0, 1080.0, (0.0, 0.0))
+    };
 
     // ponytail: theme fetched every tick while laris is up - localhost HTTP,
     // negligible; cache only if it ever shows up in a profile
-    let (theme, ready, rect) = peer
+    // `ready` does NOT come from /theme - that endpoint never returned it, so
+    // reading it here left it permanently false and the tray menu stuck on
+    // "carregando modelo...". It belongs to /overlay/state (SDD-C0 §16), which
+    // the long-poll thread owns; it publishes the value here.
+    let ready = state.orb_ready.load(Ordering::SeqCst);
+
+    let (theme, rect) = peer
         .filter(|_| laris_alive)
         .and_then(|p| {
             laris::get_theme(&p, Some(screen_w), Some(screen_h)).ok().and_then(|body| {
@@ -107,7 +117,6 @@ fn take_snapshot(state: &AppState) -> Snapshot {
                     t.get("palette")?.as_str()?.to_owned(),
                     t.get("position")?.as_str()?.to_owned(),
                 );
-                let ready = body.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
                 let rect = body.get("rect").and_then(|r| {
                     let x = r.get("x")?.as_f64()?;
                     let y = r.get("y")?.as_f64()?;
@@ -120,7 +129,7 @@ fn take_snapshot(state: &AppState) -> Snapshot {
                         h,
                     })
                 });
-                Some((theme_tuple, ready, rect))
+                Some((Some(theme_tuple), rect))
             })
         })
         .unwrap_or_default();
@@ -380,21 +389,23 @@ pub fn run() {
                 processing: AtomicBool::new(false),
                 menu_dirty: AtomicBool::new(false),
                 last_orb_rect: Mutex::new(None),
+                orb_ready: AtomicBool::new(false),
             });
 
-            let snap = take_snapshot(&app.state::<AppState>());
+            let snap = take_snapshot(app.handle(), &app.state::<AppState>());
             let menu = build_menu(app.handle(), &snap)?;
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?;
-            let mut builder = TrayIconBuilder::with_id("voxis")
+            let builder = TrayIconBuilder::with_id("voxis")
                 .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()));
 
+            // Template icons are an AppKit concept - the system retints them for
+            // the menu bar. No-op on Windows, so keep it macOS-only. Shadowing
+            // instead of `let mut` avoids an unused-mut warning elsewhere.
             #[cfg(target_os = "macos")]
-            {
-                builder = builder.icon_as_template(true);
-            }
+            let builder = builder.icon_as_template(true);
 
             let tray = builder.build(app)?;
             set_tray_icon(&tray, snap.recording.is_some());
@@ -408,7 +419,7 @@ pub fn run() {
                     std::thread::sleep(Duration::from_secs(2));
                     let state = handle.state::<AppState>();
                     let dirty = state.menu_dirty.swap(false, Ordering::SeqCst);
-                    let current = take_snapshot(&state);
+                    let current = take_snapshot(&handle, &state);
                     if current == last && !dirty {
                         continue;
                     }
@@ -469,6 +480,16 @@ pub fn run() {
                     match laris::get_overlay_state(&peer, serial, 20.0) {
                         Ok(state) => {
                             backoff = Duration::from_secs(1);
+                            // Publish readiness for the menu label. Flag the menu
+                            // dirty on change so the next 2s tick rebuilds it even
+                            // though nothing else in the snapshot moved.
+                            {
+                                let app_state = handle_lp.state::<AppState>();
+                                let was = app_state.orb_ready.swap(state.ready, Ordering::SeqCst);
+                                if was != state.ready {
+                                    app_state.menu_dirty.store(true, Ordering::SeqCst);
+                                }
+                            }
                             if state.serial != serial {
                                 serial = state.serial;
                                 if state.visible != last_visible {

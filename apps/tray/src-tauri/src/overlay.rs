@@ -109,7 +109,7 @@ pub fn sync(
             if let Some(r) = rect {
                 let changed = LAST_RECT.lock().map(|last| *last != Some(r)).unwrap_or(true);
                 if changed {
-                    let _ = win.set_inner_size(LogicalSize::new(r.w, r.h));
+                    let _ = win.set_size(LogicalSize::new(r.w, r.h));
                     let _ = win.set_position(LogicalPosition::new(r.x, r.y));
                     if let Ok(mut last) = LAST_RECT.lock() {
                         *last = Some(r);

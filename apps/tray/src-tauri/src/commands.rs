@@ -128,17 +128,20 @@ pub fn show_settings_window(app: &AppHandle) {
         let _ = w.set_focus();
         return;
     }
-    let mut builder = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::default())
+    // Shadowing rather than `let mut` + cfg block: on non-Windows the binding is
+    // never reassigned, which warns.
+    let builder = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::default())
         .title("VOXIS - Configurações")
         .inner_size(560.0, 680.0)
         .center()
         .min_inner_size(480.0, 520.0)
         .theme(None);
 
+    // Runs before any script on the page, so the stylesheet can key off the
+    // platform without the flash that an async load() would cause.
     #[cfg(windows)]
-    {
-        builder = builder.initialization_script("document.documentElement.classList.add('plat-windows');");
-    }
+    let builder =
+        builder.initialization_script("document.documentElement.classList.add('plat-windows');");
 
     let _ = builder.build();
 }
