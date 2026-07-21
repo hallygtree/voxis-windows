@@ -25,12 +25,39 @@ def test_windows_backend_delegates(monkeypatch):
     assert calls == {"warm": True, "transcribe": (8, 16000), "typed": "oi"}
 
 
-def test_windows_overlay_and_ducker_are_noops():
+def test_windows_overlay_without_state_is_noop():
+    """Overlay without injected state degrades to no-op."""
     from laris.platform.windows import WindowsBackend
     backend = WindowsBackend.__new__(WindowsBackend)
     overlay = backend.make_overlay("http://127.0.0.1:8421/overlay")
-    ducker = backend.make_ducker()
+    # These should not raise even without state
     overlay.show("dictate")
     overlay.hide()
+
+
+def test_windows_overlay_with_state_writes():
+    """Overlay with injected state updates the state on show/hide."""
+    from laris.orb_state import OrbStateManager
+    from laris.platform.windows import WindowsBackend
+    backend = WindowsBackend.__new__(WindowsBackend)
+    state = OrbStateManager()
+    overlay = backend.make_overlay("http://127.0.0.1:8421/overlay", state=state)
+
+    assert state.snapshot().visible is False
+    overlay.show("dictate")
+    snapshot = state.snapshot()
+    assert snapshot.visible is True
+    assert snapshot.mode == "dictate"
+
+    overlay.hide()
+    snapshot = state.snapshot()
+    assert snapshot.visible is False
+    assert snapshot.mode is None
+
+
+def test_windows_ducker_is_noop():
+    from laris.platform.windows import WindowsBackend
+    backend = WindowsBackend.__new__(WindowsBackend)
+    ducker = backend.make_ducker()
     ducker.duck()
     ducker.restore()

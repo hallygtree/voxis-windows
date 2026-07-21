@@ -309,3 +309,74 @@ def test_hands_free_unavailable_does_not_kill_the_daemon(monkeypatch, capsys):
 
     assert "hands-free unavailable" in capsys.readouterr().out
     assert rounds["n"] == 2
+
+
+def test_daemon_run_accepts_orb_state_parameter(monkeypatch):
+    """Verify that daemon.run() accepts orb_state parameter."""
+    import laris.daemon as daemon_mod
+    import laris.platform as platform_mod
+    import laris.hotkey as hotkey_mod
+    from laris.orb_state import OrbStateManager
+
+    class FakeBackend:
+        def warm(self): pass
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+        def start(self): pass
+
+    def stop_after_first(pressed, hands_free=None, on_tick=lambda: None):
+        raise _StopLoop
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", stop_after_first)
+
+    orb_state = OrbStateManager()
+    assert orb_state.snapshot().ready is False
+
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(
+            make_voice_session=lambda: MagicMock(),
+            orb_state=orb_state,
+        )
+
+    # After warm(), ready should be set to True
+    assert orb_state.snapshot().ready is True
+
+
+def test_daemon_run_without_orb_state_behaves_as_before(monkeypatch):
+    """Verify that daemon.run() without orb_state still works."""
+    import laris.daemon as daemon_mod
+    import laris.platform as platform_mod
+    import laris.hotkey as hotkey_mod
+
+    class FakeBackend:
+        def warm(self): pass
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+        def start(self): pass
+
+    def stop_after_first(pressed, hands_free=None, on_tick=lambda: None):
+        raise _StopLoop
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", stop_after_first)
+
+    # Should not raise
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(make_voice_session=lambda: MagicMock())  # orb_state=None

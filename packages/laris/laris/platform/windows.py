@@ -7,17 +7,21 @@ from __future__ import annotations
 import numpy as np
 
 
-class _NoOpOverlay:
+class _StateOverlay:
     """The orb is a Tauri window on Windows; the daemon still calls show/hide,
-    so accept them and do nothing - the orb reacts to /ws/voice phase events."""
-    def __init__(self, url: str) -> None:
+    so these methods update the orb state so /overlay/state reflects current
+    visibility. Degrades to no-op silently when state is None."""
+    def __init__(self, url: str, state=None) -> None:
         self.url = url
+        self.state = state
 
     def show(self, mode: str) -> None:
-        pass
+        if self.state is not None:
+            self.state.show(mode)
 
     def hide(self) -> None:
-        pass
+        if self.state is not None:
+            self.state.hide()
 
 
 class _NoOpDucker:
@@ -43,8 +47,8 @@ class WindowsBackend:
         from laris.dictation_windows import type_text
         type_text(text)
 
-    def make_overlay(self, url: str):
-        return _NoOpOverlay(url)
+    def make_overlay(self, url: str, state=None):
+        return _StateOverlay(url, state=state)
 
     def make_ducker(self):
         return _NoOpDucker()

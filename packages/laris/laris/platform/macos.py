@@ -21,7 +21,7 @@ class MacOSBackend:
         from laris.dictation import type_text
         type_text(text)
 
-    def make_overlay(self, url: str):
+    def make_overlay(self, url: str, state=None):
         from laris.overlay import Overlay
         return Overlay(url=url)
 

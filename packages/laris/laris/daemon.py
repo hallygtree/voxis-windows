@@ -126,6 +126,7 @@ def run(
     kiris_dispatch: Callable[[str], bool] | None = None,
     voice_queue=None,
     overlay_url: str = "",
+    orb_state=None,
 ) -> None:
     """Runs the PTT voice loop on the calling thread - callers run this on a
     background daemon thread (see claude-code-ops's backend/main.py)."""
@@ -138,11 +139,13 @@ def run(
 
     backend = get_backend()
     backend.warm()
+    if orb_state is not None:
+        orb_state.set_ready(True)
     stt = backend
     type_text = backend.type_text
     voice_session = make_voice_session()
     assistant = make_assistant()
-    overlay = backend.make_overlay(overlay_url)
+    overlay = backend.make_overlay(overlay_url, state=orb_state)
     ducker = backend.make_ducker()
     ptt = PushToTalk(config.DICTATE_KEY)
     ptt.start()

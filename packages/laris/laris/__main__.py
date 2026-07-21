@@ -15,6 +15,7 @@ import uvicorn
 
 from laris import config, peer_discovery
 from laris.auth import generate_token
+from laris.orb_state import OrbStateManager
 from laris.peer_client import KirisClient, PanelClient
 from laris.server import build_app
 from laris.state_machine import VoiceSession
@@ -57,7 +58,8 @@ def main() -> None:
     peer_discovery.write_peer("laris", f"http://127.0.0.1:{LARIS_PORT}", token=laris_token)
 
     voice_queue = queue.Queue()
-    app = build_app(token=laris_token, voice_queue=voice_queue)
+    orb_state = OrbStateManager()
+    app = build_app(token=laris_token, voice_queue=voice_queue, orb_state=orb_state)
     threading.Thread(
         # access_log=False: the token rides in the query string, and the
         # default access log would write it to the daemon's stdout/log
@@ -102,6 +104,7 @@ def main() -> None:
         kiris_dispatch=kiris_client.ask if kiris_online else None,
         voice_queue=voice_queue,
         overlay_url=f"http://127.0.0.1:{LARIS_PORT}/overlay?token={laris_token}",
+        orb_state=orb_state,
     )
 
 

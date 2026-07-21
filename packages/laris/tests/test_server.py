@@ -38,3 +38,142 @@ def test_ws_voice_streams_queued_events():
     with TestClient(app).websocket_connect("/ws/voice?token=test-token") as ws:
         data = ws.receive_json()
         assert data == {"phase": "recording", "amplitude": 0.5}
+
+
+def test_get_theme_without_screen_dimensions():
+    """Verify that /theme without params returns the same shape as before."""
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    response = TestClient(app).get("/theme?token=test-token")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "theme" in data
+    assert "palettes" in data
+    assert "rect" not in data  # No rect when dimensions omitted
+
+
+def test_get_theme_with_valid_screen_dimensions():
+    """Verify that /theme with valid params adds rect in top-left coordinates."""
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    response = TestClient(app).get("/theme?token=test-token&screen_w=1920.0&screen_h=1080.0")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "theme" in data
+    assert "palettes" in data
+    assert "rect" in data
+    rect = data["rect"]
+    assert "x" in rect and "y" in rect and "w" in rect and "h" in rect
+    # Default theme: size=190, position=center → (865, 445, 190, 190)
+    assert rect == {"x": 865.0, "y": 445.0, "w": 190.0, "h": 190.0}
+
+
+def test_get_theme_with_zero_dimensions():
+    """Verify that zero dimensions are treated as "not requested"."""
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    response = TestClient(app).get("/theme?token=test-token&screen_w=0.0&screen_h=1080.0")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "rect" not in data
+
+
+def test_get_theme_with_only_one_dimension():
+    """Verify that providing only one dimension is treated as "not requested"."""
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    response = TestClient(app).get("/theme?token=test-token&screen_w=1920.0")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "rect" not in data
+
+
+def test_get_theme_invalid_token():
+    """Verify that invalid token returns 403."""
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    response = TestClient(app).get("/theme?token=wrong-token")
+
+    assert response.status_code == 403
+
+
+def test_get_overlay_state_immediate_response():
+    """Verify that /overlay/state?since=0 responds immediately."""
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    response = TestClient(app).get("/overlay/state?token=test-token&since=0")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "visible" in data
+    assert "ready" in data
+    assert "mode" in data
+    assert "serial" in data
+    assert isinstance(data["visible"], bool)
+    assert isinstance(data["ready"], bool)
+    assert data["mode"] is None or isinstance(data["mode"], str)
+    assert isinstance(data["serial"], int)
+    assert data["serial"] >= 1
+
+
+def test_get_overlay_state_invalid_token():
+    """Verify that invalid token returns 403."""
+    from laris.server import build_app
+
+    app = build_app(token="test-token")
+    response = TestClient(app).get("/overlay/state?token=wrong-token&since=0")
+
+    assert response.status_code == 403
+
+
+def test_get_overlay_state_with_injected_orb_state():
+    """Verify that changes to injected orb_state are reflected in /overlay/state."""
+    from laris.orb_state import OrbStateManager
+    from laris.server import build_app
+
+    orb_state = OrbStateManager()
+    app = build_app(token="test-token", orb_state=orb_state)
+
+    # Initial state
+    response = TestClient(app).get("/overlay/state?token=test-token&since=0")
+    data = response.json()
+    assert data["visible"] is False
+    assert data["ready"] is False
+
+    # Mutate the state
+    orb_state.show("dictate")
+    response = TestClient(app).get("/overlay/state?token=test-token&since=0")
+    data = response.json()
+    assert data["visible"] is True
+    assert data["mode"] == "dictate"
+
+    # Hide it
+    orb_state.hide()
+    response = TestClient(app).get("/overlay/state?token=test-token&since=0")
+    data = response.json()
+    assert data["visible"] is False
+    assert data["mode"] is None
+
+
+def test_get_overlay_state_wait_clamped():
+    """Verify that wait parameter is clamped to [0, 25]."""
+    from laris.server import build_app
+    import time
+
+    app = build_app(token="test-token")
+    start = time.monotonic()
+    # Request with wait=999 should return in ~25s max
+    response = TestClient(app, timeout=30).get("/overlay/state?token=test-token&since=999&wait=999")
+    elapsed = time.monotonic() - start
+    assert response.status_code == 200
+    assert elapsed < 26  # Should be clamped to 25s
