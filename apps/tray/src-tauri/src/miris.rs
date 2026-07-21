@@ -57,6 +57,9 @@ fn pid_alive(pid: i32) -> bool {
 mod win32 {
     use std::ffi::c_void;
 
+    /// The right WaitForSingleObject actually needs: without it the wait
+    /// fails with WAIT_FAILED instead of reporting the process state.
+    pub const SYNCHRONIZE: u32 = 0x0010_0000;
     pub const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     pub const WAIT_TIMEOUT: u32 = 258;
     pub const ERROR_ACCESS_DENIED: u32 = 5;
@@ -74,10 +77,12 @@ mod win32 {
 fn pid_alive(pid: i32) -> bool {
     use win32::*;
 
-    // QUERY_LIMITED_INFORMATION is the weakest right that still opens a
-    // process object; it works across integrity levels where PROCESS_QUERY_
-    // INFORMATION would be denied.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
+    // Same access mask as miris/cli.py::_pid_alive, deliberately: SYNCHRONIZE
+    // is what the wait below needs, QUERY_LIMITED_INFORMATION is the weakest
+    // query right and survives integrity-level differences that would deny
+    // PROCESS_QUERY_INFORMATION.
+    let access = SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION;
+    let handle = unsafe { OpenProcess(access, 0, pid as u32) };
     if handle.is_null() {
         // ERROR_ACCESS_DENIED means the pid *exists* but belongs to a more
         // privileged process - treat it as alive, like unix treats EPERM.
