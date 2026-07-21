@@ -47,8 +47,14 @@ def generate(cfg: Config, transcript: str, timeout_s: int = 300) -> dict:
         raise NotesError(f"llm command not found in PATH: {llm_cmd[0]}")
     llm_cmd[0] = resolved_bin
     try:
+        # encoding is explicit: text=True decodes with the locale encoding,
+        # which is cp1252 on a pt-BR Windows. The LLM answers in UTF-8, so
+        # "memória" came back as "memÃ³ria" - and the mangled titulo is what
+        # vault.save_note turns into the note's filename. errors="replace"
+        # keeps a badly-behaved LLM from taking the whole pipeline down.
         proc = subprocess.run(llm_cmd + [prompt], capture_output=True,
-                              text=True, timeout=timeout_s)
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout_s)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise NotesError(f"llm command failed: {exc}") from exc
     if proc.returncode != 0:

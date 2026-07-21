@@ -202,7 +202,8 @@ def cmd_doctor(cfg: config.Config) -> None:
         llm_cmd[0] = resolved_bin
     try:
         llm = subprocess.run(llm_cmd + ["Responda apenas: OK"],
-                             capture_output=True, text=True, timeout=120)
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=120)
         llm_ok = llm.returncode == 0 and llm.stdout.strip() != ""
     except (OSError, subprocess.TimeoutExpired):
         llm_ok = False

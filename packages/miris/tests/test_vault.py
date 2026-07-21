@@ -31,7 +31,7 @@ def test_save_note_routes_category_to_mapped_folder(tmp_path):
     path = vault.save_note(_cfg(tmp_path), NOTES, "[00:00] Eu: oi", "20260716-1000",
                            date=dt.date(2026, 7, 16))
     assert path == tmp_path / "vault/interviews/2026-07-16-entrevista-acme-backend-senior.md"
-    content = path.read_text()
+    content = path.read_text(encoding="utf-8")
     assert 'categoria: "entrevistas"' in content
     assert "- [ ] Enviar case até sexta" in content
     assert "[00:00] Eu: oi" in content
@@ -45,7 +45,7 @@ def test_save_note_unknown_category_goes_to_inbox(tmp_path):
 
 def test_frontmatter_survives_colon_in_title(tmp_path):
     path = vault.save_note(_cfg(tmp_path), NOTES, "t", "s", date=dt.date(2026, 7, 16))
-    frontmatter = path.read_text().split("---")[1]
+    frontmatter = path.read_text(encoding="utf-8").split("---")[1]
     assert 'title: "Entrevista Acme: Backend Sênior"' in frontmatter
 
 

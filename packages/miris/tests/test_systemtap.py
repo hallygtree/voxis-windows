@@ -1,9 +1,18 @@
+import sys
 import time
 from pathlib import Path
 
 import pytest
 
 from miris.systemtap import SystemTap
+
+# SystemTap is the macOS backend (the audiotap Swift helper); Windows uses
+# WindowsLoopbackTap instead (see test_loopback_windows.py). The fixture below
+# is a /bin/sh script, which Windows cannot execute at all.
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="SystemTap is the macOS/POSIX backend; Windows uses WindowsLoopbackTap",
+)
 
 FAKE_HELPER = """#!/bin/sh
 trap 'echo done >> "$1"; exit 0' TERM INT
@@ -25,6 +34,7 @@ def test_start_raises_when_binary_missing(tmp_path):
         tap.start()
 
 
+@posix_only
 def test_lifecycle_start_alive_stop(tmp_path):
     out = tmp_path / "out.wav"
     tap = SystemTap(out, binary=_fake_binary(tmp_path))
