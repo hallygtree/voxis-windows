@@ -11,28 +11,13 @@
 </p>
 
 <p align="center">
-  <strong>Windows port</strong> of
-  <a href="https://github.com/sammyjdev/voxis">sammyjdev/voxis</a>.
+  Windows-focused functionality port of
+  <a href="https://github.com/sammyjdev/voxis">sammyjdev/voxis</a> - same app,
+  with the macOS-only engines (mlx-whisper, Core Audio) swapped for
+  cross-platform equivalents so dictation and meetings run on Windows too.
 </p>
 
 ---
-
-## What this fork is
-
-[VOXIS](https://github.com/sammyjdev/voxis) is a macOS-native voice product by
-[@sammyjdev](https://github.com/sammyjdev). This repository ports it to
-**Windows**, aiming for feature parity: dictation and meeting transcription that
-work as well as they do on the Mac.
-
-The macOS build depends on Apple-only pieces - `mlx-whisper` for speech-to-text
-and a Core Audio tap for system audio. The port replaces those with
-cross-platform equivalents (a torch-free `faster-whisper` STT and WASAPI
-loopback capture) while keeping the same tray app, orb overlay, settings and
-`/theme` API. Where behaviour must differ per platform it is guarded, so the
-macOS path stays intact.
-
-Upstream is credited as the origin of the design and most of the codebase; this
-fork owns the Windows-specific engine backends, packaging and tray glue.
 
 ## Family
 
@@ -45,24 +30,18 @@ fork owns the Windows-specific engine backends, packaging and tray glue.
 
 Each package keeps its own venv, tests and README - see inside.
 
-## Install (Windows)
+## Install
 
-The tray installer bundles both engines - no Python or Rust needed to run the
-app. Download the latest build from this fork's
+Full steps per component and per OS: **[docs/INSTALL.md](docs/INSTALL.md)**.
+
+On **Windows**, the tray installer bundles both engines - no Python or Rust
+needed. Download the latest build from this fork's
 [Releases page](https://github.com/Allyhgf/voxis-windows/releases):
+`VOXIS_x.y.z_x64_en-US.msi` (MSI, recommended) or
+`VOXIS_x.y.z_x64-setup.exe` (NSIS). Builds are unsigned, so SmartScreen shows a
+one-time "unknown publisher" prompt - choose **More info -> Run anyway**.
 
-- `VOXIS_x.y.z_x64_en-US.msi` - MSI installer (recommended)
-- `VOXIS_x.y.z_x64-setup.exe` - NSIS installer
-
-Builds are unsigned, so Windows SmartScreen shows a one-time "unknown publisher"
-prompt - choose **More info -> Run anyway**. Full per-component steps and the
-macOS instructions are in **[docs/INSTALL.md](docs/INSTALL.md)**.
-
-> **Alpha.** This is an early build. Dictation and meetings work; UI polish and
-> the last parity items are still landing. Expect rough edges and please report
-> what breaks.
-
-For **macOS**, use the upstream project:
+On **macOS**, use the upstream project:
 [sammyjdev/voxis](https://github.com/sammyjdev/voxis).
 
 ## Privacy & security
@@ -77,17 +56,11 @@ For **macOS**, use the upstream project:
 
 ## Status
 
-- **macOS and Windows both run dictation and meetings.** The Windows port is at
-  **alpha** (`v0.1.0-alpha`): end-to-end dictation and meeting transcription
-  work; UI parity with macOS and general polish are in progress.
+- The Windows port is at **alpha** (`v0.1.0-alpha`): end-to-end dictation and
+  meeting transcription work; UI parity with macOS and general polish are in
+  progress.
 - The tray disables menu items when engines are absent or offline, and never
   crashes.
 - Meetings: two-channel recording ("Eu"/"Eles") gives speaker separation for
   free; notes route to the vault by user-defined categories.
 - Linux: the tray compiles, but the engines are not ported yet.
-
-## Relationship to upstream
-
-This fork is developed independently and will be offered back to
-[sammyjdev/voxis](https://github.com/sammyjdev/voxis) once Windows parity is
-confirmed. It is not a substitute for the upstream project on macOS.
