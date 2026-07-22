@@ -151,8 +151,19 @@ def run(
     ptt.start()
     vad = None
     vad_unavailable = False
+    # ASSISTANT_MODE=always_on (the tray "Hands-free" checkbox) boots straight
+    # into hands-free instead of waiting for the double-tap gesture. We arm the
+    # existing in-loop flag rather than routing to run_always_on(): that path
+    # constructs VadCapture() eagerly, which SystemExits on the torch-free
+    # Windows bundle and would kill the whole daemon - plain dictation included -
+    # at boot. Arming here degrades to PTT via the VAD-unavailable guard below.
+    if config.MODE == "always_on":
+        ptt.hands_free.set()
     kiris = "com Kiris (assistente)" if assistant else "pura (VOICE_ASSISTANT=0, muda)"
-    print(f"[Voice] Laris (transcritora) pronta, {kiris} - PTT: {config.DICTATE_KEY}")
+    print(
+        f"[Voice] Laris (transcritora) pronta, {kiris} - "
+        f"PTT: {config.DICTATE_KEY}, modo: {config.MODE}"
+    )
 
     def _reset_orb_if_stale():
         if voice_session.expire_if_stale():

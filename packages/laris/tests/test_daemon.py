@@ -311,6 +311,89 @@ def test_hands_free_unavailable_does_not_kill_the_daemon(monkeypatch, capsys):
     assert rounds["n"] == 2
 
 
+def test_always_on_boots_into_hands_free(monkeypatch):
+    """ASSISTANT_MODE=always_on (the tray 'Hands-free' checkbox) must boot the
+    daemon already armed. We route it through run()'s in-loop hands-free flag,
+    NOT run_always_on(), so the torch-free Windows bundle degrades to PTT via the
+    VAD-unavailable guard instead of SystemExit-ing at boot."""
+    import laris.config as config_mod
+    import laris.daemon as daemon_mod
+    import laris.hotkey as hotkey_mod
+    import laris.platform as platform_mod
+
+    class FakeBackend:
+        def warm(self): pass
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+
+        def start(self): pass
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+    monkeypatch.setattr(config_mod, "MODE", "always_on")
+
+    seen = {}
+
+    def fake_wait(pressed, hands_free=None, on_tick=lambda: None):
+        # The flag must already be set the first time the loop asks for input.
+        seen["armed_at_entry"] = hands_free.is_set()
+        raise _StopLoop
+
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", fake_wait)
+
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(make_voice_session=lambda: MagicMock())
+
+    assert seen["armed_at_entry"] is True
+
+
+def test_ptt_mode_does_not_arm_hands_free(monkeypatch):
+    """The default ASSISTANT_MODE=ptt must NOT pre-arm hands-free - the loop
+    should start waiting for a real key press, not a VAD session."""
+    import laris.config as config_mod
+    import laris.daemon as daemon_mod
+    import laris.hotkey as hotkey_mod
+    import laris.platform as platform_mod
+
+    class FakeBackend:
+        def warm(self): pass
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+
+        def start(self): pass
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+    monkeypatch.setattr(config_mod, "MODE", "ptt")
+
+    seen = {}
+
+    def fake_wait(pressed, hands_free=None, on_tick=lambda: None):
+        seen["armed_at_entry"] = hands_free.is_set()
+        raise _StopLoop
+
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", fake_wait)
+
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(make_voice_session=lambda: MagicMock())
+
+    assert seen["armed_at_entry"] is False
+
+
 def test_daemon_run_accepts_orb_state_parameter(monkeypatch):
     """Verify that daemon.run() accepts orb_state parameter."""
     import laris.daemon as daemon_mod
