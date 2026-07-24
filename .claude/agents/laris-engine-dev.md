@@ -36,10 +36,13 @@ Atenção ao inspecionar bundle: **não** procure um diretório `_internal/laris
 `config_dir` bate entre Rust e Python (`~/.config/voice-at`).
 
 Defaults em `config.py`: `DICTATE_KEY="shift_r"`, `NOISE_REDUCTION="off"`,
-e **`STT_MODEL_FASTER="large"`** — mudou de `"small"` em 2026-07-21 por decisão
-do usuário, para paridade de qualidade com o `whisper-large-v3-turbo-q4` do
-macOS. Isso tornou o `warm()` muito mais lento (dezenas de segundos em CPU
-int8), o que é relevante para qualquer coisa que dependa de boot.
+e **`STT_MODEL_FASTER="large-v3-turbo"`** — passou por `"small"` → `"large"`
+(2026-07-21, paridade de qualidade com o macOS) → `"large-v3-turbo"`
+(2026-07-24). O `"large"` puro era large-v3 **full** (32 camadas de decoder) e
+em CPU int8 dava transcrição de minutos ("70 anos"); o macOS sempre usou o
+**turbo** (4 camadas, ~8x mais rápido no decode). O turbo dá paridade de
+qualidade e é bem mais rápido no `warm()`/boot. CUDA float16 é escolhido
+sozinho quando o runtime CUDA 12 do CTranslate2 está presente; senão CPU int8.
 
 **Armadilhas já pagas, não repita:**
 - `_cuda_available()` só prova que há driver NVIDIA, **não** que cuBLAS/cuDNN

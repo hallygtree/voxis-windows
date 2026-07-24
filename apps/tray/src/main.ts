@@ -76,9 +76,10 @@ async function load() {
   // user gets that the two are not interchangeable.
   const model = $<HTMLInputElement>("#stt-model");
   if (isWindows) {
-    model.value = s.laris.STT_MODEL_FASTER ?? "small";
-    model.placeholder = "small";
-    model.title = "faster-whisper: tiny | base | small | medium | large-v3";
+    model.value = s.laris.STT_MODEL_FASTER ?? "large-v3-turbo";
+    model.placeholder = "large-v3-turbo";
+    model.title =
+      "faster-whisper: tiny | base | small | medium | large-v3 | large-v3-turbo";
   } else {
     model.value = s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
     model.placeholder = "mlx-community/whisper-large-v3-turbo-q4";
