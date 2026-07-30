@@ -70,16 +70,16 @@ async function load() {
     : defaultKey;
   $<HTMLInputElement>("#hands-free").checked =
     s.laris.ASSISTANT_MODE === "always_on";
-  // Windows runs faster-whisper (plain size names, STT_MODEL_FASTER); macOS
-  // runs mlx (repo ids, STT_MODEL). The field is free text on purpose - a
-  // local model dir is valid too - so the placeholder is the only hint the
-  // user gets that the two are not interchangeable.
+  // Windows runs whisper.cpp (ggml file names, STT_MODEL_GGML); macOS runs mlx
+  // (repo ids, STT_MODEL). The field is free text on purpose - another ggml
+  // file in the models dir is valid too - so the placeholder is the only hint
+  // the user gets that the two are not interchangeable.
   const model = $<HTMLInputElement>("#stt-model");
   if (isWindows) {
-    model.value = s.laris.STT_MODEL_FASTER ?? "large-v3-turbo";
-    model.placeholder = "large-v3-turbo";
+    model.value = s.laris.STT_MODEL_GGML ?? "ggml-large-v3-turbo-q5_0.bin";
+    model.placeholder = "ggml-large-v3-turbo-q5_0.bin";
     model.title =
-      "faster-whisper: tiny | base | small | medium | large-v3 | large-v3-turbo";
+      "whisper.cpp ggml model file in ~/.config/voice-at/models (or an absolute path)";
   } else {
     model.value = s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
     model.placeholder = "mlx-community/whisper-large-v3-turbo-q4";
@@ -124,10 +124,10 @@ function bind() {
           : "ptt",
         NOISE_REDUCTION: $<HTMLSelectElement>("#noise").value,
       };
-      // On Windows, persist STT_MODEL_FASTER; on macOS, persist STT_MODEL
+      // On Windows, persist STT_MODEL_GGML; on macOS, persist STT_MODEL
       const modelValue = $<HTMLInputElement>("#stt-model").value.trim();
       if (isWindows) {
-        updates.STT_MODEL_FASTER = modelValue;
+        updates.STT_MODEL_GGML = modelValue;
       } else {
         updates.STT_MODEL = modelValue;
       }

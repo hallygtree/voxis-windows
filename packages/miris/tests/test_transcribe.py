@@ -103,14 +103,14 @@ def test_transcribe_channel_uses_spans_and_transcriber(tmp_path):
 
 
 class _FWSegment:
-    """Shape of a faster-whisper segment: start/end in seconds, leading-space text."""
+    """Shape of a whisper.cpp segment: start/end in seconds, leading-space text."""
 
     def __init__(self, start, end, text):
         self.start, self.end, self.text = start, end, text
 
 
 class VadTranscriber:
-    """A transcriber exposing transcribe_with_vad, like FasterWhisperTranscriber."""
+    """A transcriber exposing transcribe_with_vad, like WhisperCppTranscriber."""
 
     def __init__(self, segments):
         self._segments = segments
@@ -121,11 +121,11 @@ class VadTranscriber:
 
 
 def test_transcribe_channel_prefers_builtin_vad_and_keeps_its_timestamps(tmp_path):
-    """B3: on Windows the VAD is faster-whisper's own (Silero via onnxruntime),
-    not silero_vad+torch. With vad_filter=True faster-whisper runs
-    restore_speech_timestamps (transcribe.py:1010), so segment.start/.end are
-    already on the original audio's timeline - they must be carried through
-    verbatim, not rescaled as if they were sample indices."""
+    """B3: on Windows the segmenting is whisper.cpp's own, not silero_vad+torch
+    (which is excluded from the bundle, so taking that branch is a hard
+    failure). whisper.cpp reports segment.start/.end already on the original
+    audio's timeline - they must be carried through verbatim, not rescaled as
+    if they were sample indices."""
     _write_wav(tmp_path / "d.wav", np.zeros(32000, dtype=np.float32), 16000)
 
     def exploding_spans(audio, sr=16000):

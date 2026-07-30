@@ -17,9 +17,12 @@ def _default_transcriber_factory():
     # per utterance unless the user pinned STT_LANGUAGE themselves
     os.environ.setdefault("STT_LANGUAGE", "")
     if sys.platform == "win32":
-        # Windows: use faster-whisper (torch-free)
-        from laris.stt_faster import FasterWhisperTranscriber
-        return FasterWhisperTranscriber()
+        # Windows: use whisper.cpp (torch-free). allow_parakeet=False on
+        # purpose: transcribe_channel needs .start/.end per segment, which only
+        # the Whisper path produces, and meetings are processed offline where a
+        # slower CPU run is tolerable. Dictation makes the opposite trade.
+        from laris.stt_whispercpp import WhisperCppTranscriber
+        return WhisperCppTranscriber(allow_parakeet=False)
     else:
         # macOS: use mlx-whisper
         from laris.transcriber import Transcriber

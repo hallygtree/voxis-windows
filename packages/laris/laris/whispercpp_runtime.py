@@ -154,6 +154,21 @@ def ensure_model(spec: ModelSpec) -> Path:
     return path
 
 
+def resolve_whisper_model(name: str) -> Path:
+    """Honour config.STT_MODEL_GGML. The default name downloads on demand;
+    anything else has to exist already (in the models dir or as a path),
+    because there is no download URL for an arbitrary ggml file."""
+    name = (name or "").strip()
+    if not name or name == WHISPER_MODEL.filename:
+        return ensure_model(WHISPER_MODEL)
+    for candidate in (models_dir() / name, Path(name).expanduser()):
+        if candidate.is_file():
+            return candidate
+    print(f"[STT] {name} not found in {models_dir()}; "
+          f"falling back to {WHISPER_MODEL.filename}")
+    return ensure_model(WHISPER_MODEL)
+
+
 def _free_port() -> int:
     import socket
     with socket.socket() as s:

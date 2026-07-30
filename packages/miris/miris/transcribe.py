@@ -70,9 +70,10 @@ def transcribe_channel(path: Path, speaker: str, transcriber,
     audio = load_wav_mono16k(path)
     segments = []
 
-    # If transcriber supports VAD-aware transcription (faster-whisper), use it
+    # If transcriber supports VAD-aware transcription (whisper.cpp), use it
     if hasattr(transcriber, "transcribe_with_vad"):
-        # Returns faster-whisper segments with start/end timestamps
+        # Returns segments carrying start/end timestamps on the original
+        # timeline, so no offset arithmetic is needed here
         for segment in transcriber.transcribe_with_vad(audio):
             text = collapse_repetitions(segment.text)
             if text:

@@ -34,16 +34,14 @@ NOISE_REDUCTION: str = _setting("NOISE_REDUCTION", _DEFAULT_NOISE_REDUCTION)  # 
 # and ~1.2GB less resident RAM, transcription quality tied on pt-BR samples.
 # Revert with STT_MODEL=mlx-community/whisper-large-v3-turbo if quality dips.
 STT_MODEL: str = _setting("STT_MODEL", "mlx-community/whisper-large-v3-turbo-q4")
-# faster-whisper model id for the Windows/Linux backend (a plain size name,
-# not the mlx repo id STT_MODEL holds). macOS runs the *turbo* large model
-# (mlx-community/whisper-large-v3-turbo-q4): 4 decoder layers, ~8x faster decode
-# than full large-v3. Plain "large" resolves to large-v3 full (32 decoder
-# layers); on CPU int8 that was the multi-minute ("70 years") transcription -
-# it copied the size but lost turbo, quantization and the Apple hardware. The
-# turbo weights give quality parity with macOS; stt_faster.py auto-picks CUDA
-# float16 when the CUDA 12 CTranslate2 runtime is present, else CPU int8 (usable
-# on turbo). Turbo is also a smaller download, so warm()/boot is faster too.
-STT_MODEL_FASTER: str = _setting("STT_MODEL_FASTER", "large-v3-turbo")
+# whisper.cpp GGML model for the Windows/Linux backend (a file name, not the
+# mlx repo id STT_MODEL holds). Downloaded on first use into
+# ~/.config/voice-at/models. The turbo weights match what macOS runs
+# (mlx-community/whisper-large-v3-turbo-q4): 4 decoder layers, ~8x faster
+# decode than full large-v3, and the q5_0 quantization measured identical
+# word-for-word to the unquantized output on pt-BR. Point this at another ggml
+# file (name in the models dir, or an absolute path) to override.
+STT_MODEL_GGML: str = _setting("STT_MODEL_GGML", "ggml-large-v3-turbo-q5_0.bin")
 # empty string = Whisper auto-detect per utterance (used by miris for
 # bilingual meetings); laris dictation keeps the pt-BR lock by default
 STT_LANGUAGE: str = os.environ.get("STT_LANGUAGE", "pt")

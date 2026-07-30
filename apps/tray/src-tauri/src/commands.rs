@@ -10,7 +10,7 @@ const KNOWN_LARIS_KEYS: [&str; 5] = [
     "ASSISTANT_MODE",
     "DICTATE_KEY",
     "STT_MODEL",
-    "STT_MODEL_FASTER",
+    "STT_MODEL_GGML",
     "NOISE_REDUCTION",
 ];
 
@@ -29,7 +29,7 @@ fn valid_value(key: &str, value: &serde_json::Value) -> bool {
         "NOISE_REDUCTION" => matches!(s, "on" | "off"),
         "DICTATE_KEY" => DICTATE_KEYS.contains(&s),
         "STT_MODEL" => !s.trim().is_empty(),
-        "STT_MODEL_FASTER" => !s.trim().is_empty(),
+        "STT_MODEL_GGML" => !s.trim().is_empty(),
         _ => false,
     }
 }

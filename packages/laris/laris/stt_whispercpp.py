@@ -92,7 +92,7 @@ class WhisperCppTranscriber:
     def _start_whisper(self, device: runtime.VulkanDevice | None) -> None:
         self.backend = "whisper"
         self.device = f"vulkan:{device.index} ({device.name})" if device else "cpu"
-        model = runtime.ensure_model(runtime.WHISPER_MODEL)
+        model = runtime.resolve_whisper_model(config.STT_MODEL_GGML)
         server = runtime.WhisperServer(model, device, config.STT_LANGUAGE)
         server.start()
         self._server = server

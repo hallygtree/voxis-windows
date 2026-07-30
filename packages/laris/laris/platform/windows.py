@@ -1,4 +1,4 @@
-"""Windows backend: faster-whisper STT + clipboard/Ctrl+V paste. The orb is
+"""Windows backend: whisper.cpp STT + clipboard/Ctrl+V paste. The orb is
 hosted by the Tauri tray (a transparent window), so the overlay here is a
 no-op; per-app output ducking is out of scope, so the ducker is a no-op too.
 Heavy imports are lazy (constructed only when this backend is)."""
@@ -34,8 +34,10 @@ class _NoOpDucker:
 
 class WindowsBackend:
     def __init__(self) -> None:
-        from laris.stt_faster import FasterWhisperTranscriber
-        self._stt = FasterWhisperTranscriber()
+        from laris.stt_whispercpp import WhisperCppTranscriber
+        # Dictation only needs text, so the fast Parakeet fallback is allowed
+        # when there is no GPU. Miris opts out of it - see miris/pipeline.py.
+        self._stt = WhisperCppTranscriber(allow_parakeet=True)
 
     def warm(self) -> None:
         self._stt.warm()

@@ -13,7 +13,8 @@ def test_windows_backend_delegates(monkeypatch):
             calls["transcribe"] = (len(audio), sample_rate)
             return "texto"
 
-    monkeypatch.setattr("laris.stt_faster.FasterWhisperTranscriber", lambda: FakeStt())
+    monkeypatch.setattr("laris.stt_whispercpp.WhisperCppTranscriber",
+                        lambda allow_parakeet=True: FakeStt())
     monkeypatch.setattr("laris.dictation_windows.type_text",
                         lambda text: calls.__setitem__("typed", text))
 
