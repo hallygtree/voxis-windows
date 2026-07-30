@@ -51,8 +51,17 @@ Full per-component steps are in **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## Status
 
-The port is at **alpha** (`v0.1.0-alpha`): end-to-end dictation and meeting
+The port is at **alpha** (`v0.3.0`): end-to-end dictation and meeting
 transcription work; UI parity and general polish are in progress. The tray
 disables menu items when the engines are absent or offline. Meetings use
 two-channel recording ("Eu"/"Eles") for free speaker separation, and route
 notes to the vault by user-defined categories.
+
+Speech recognition runs on [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+with the Vulkan backend, so any reasonably modern GPU accelerates it - NVIDIA,
+AMD and Intel alike, integrated graphics included - and the Vulkan loader ships
+with the GPU driver, so there is nothing extra to install. The Whisper
+`large-v3-turbo` model (q5_0, 547 MB) is downloaded on first use. Without a
+usable GPU, dictation falls back to NVIDIA's Parakeet TDT v3 on the CPU, which
+is considerably faster than Whisper there but covers 25 languages rather than
+99.
