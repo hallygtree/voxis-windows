@@ -20,17 +20,33 @@ datas, binaries, hiddenimports = [], [], []
 # which is the only place they are still cheap to notice.
 # (pyaudiowpatch was listed here as an alternative backend but nothing imports
 # it; it is not a dependency and collecting it only bloated the bundle.)
-for pkg in ("faster_whisper", "ctranslate2", "av", "onnxruntime", "sounddevice",
-            "soundcard"):
+# STT no longer appears here: faster_whisper/ctranslate2 were dropped with the
+# CUDA-only backend, and av/onnxruntime/tokenizers/huggingface_hub came in only
+# as their dependencies (WAVs are read with the stdlib `wave` module).
+for pkg in ("sounddevice", "soundcard"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
     hiddenimports += h
 
+# whisper.cpp binaries, staged by CI. miris-engine is its own onedir bundle and
+# resolves them through sys._MEIPASS, so it needs its own copy rather than
+# reaching into the laris engine's directory - the two are installed side by
+# side and a relative hop between them would break if either moves. The
+# duplication is more than paid for by dropping ctranslate2/onnxruntime/av.
+_whispercpp = Path(SPECPATH).parent / "whispercpp"
+if _whispercpp.is_dir():
+    datas.append((str(_whispercpp), "whispercpp"))
+else:
+    raise SystemExit(
+        f"[miris.spec] {_whispercpp} is missing - the whisper.cpp build step "
+        "must run before PyInstaller. Failing here rather than shipping an "
+        "engine that records meetings it cannot transcribe."
+    )
+
 # Ensure miris and laris submodules are included in the bundle
 hiddenimports += collect_submodules("miris")
 hiddenimports += collect_submodules("laris")
-hiddenimports += ["tokenizers", "huggingface_hub"]
 
 a = Analysis(
     ["entry.py"],

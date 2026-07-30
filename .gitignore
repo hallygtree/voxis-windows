@@ -1,3 +1,8 @@
 .claude/settings.local.json
 .venv*/
 test-local.ps1
+
+# whisper.cpp binaries staged by the build (see tray-build.yml); ~76 MB of
+# native output that is rebuilt from a pinned upstream tag, never committed
+packages/*/whispercpp/
+whisper.cpp/

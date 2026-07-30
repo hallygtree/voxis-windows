@@ -56,6 +56,53 @@ jobs:
         with:
           python-version: "3.11"
 
+      # whisper.cpp is the STT engine on Windows. Upstream publishes no Vulkan
+      # asset (only cpu / blas / cublas), so it is built here from a pinned
+      # tag. Vulkan is what makes GPU acceleration work on AMD and Intel as
+      # well as NVIDIA, and its loader ships with the GPU driver - the CUDA
+      # route needed ~2 GB of redistributable DLLs for NVIDIA alone.
+      - name: Checkout whisper.cpp
+        if: matrix.platform == 'windows-latest'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: v1.9.1
+          path: whisper.cpp
+
+      # Install recipe mirrored from llama.cpp's own release workflow, which
+      # exercises the same ggml Vulkan backend every release.
+      - name: Install Vulkan SDK
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          VULKAN_VERSION: 1.4.313.2
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
+      # Each engine is its own onedir bundle resolving the binaries through
+      # sys._MEIPASS, so both need a copy. The specs hard-fail when this
+      # directory is missing rather than shipping an engine that cannot
+      # transcribe - it is packaged windowed, so that would fail in silence.
+      - name: Build whisper.cpp (Vulkan)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: whisper.cpp
+        run: |
+          cmake -B build -DGGML_VULKAN=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=ON
+          cmake --build build --config Release -j 4
+          foreach ($dest in @("../packages/laris/whispercpp", "../packages/miris/whispercpp")) {
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Copy-Item build/bin/Release/*.exe $dest -Force
+            Copy-Item build/bin/Release/*.dll $dest -Force
+          }
+          if (-not (Test-Path ../packages/laris/whispercpp/whisper-server.exe)) {
+            throw "whisper-server.exe was not produced - the engines cannot transcribe without it"
+          }
+          Get-ChildItem ../packages/laris/whispercpp | ForEach-Object { "{0,12:N0}  {1}" -f $_.Length, $_.Name }
+
       - name: Build frozen laris engine (Windows)
         if: matrix.platform == 'windows-latest'
         working-directory: packages/laris
