@@ -131,15 +131,26 @@ def record_while(
 
 
 class VadCapture:
-    """Iterates voiced utterances detected by Silero VAD, always-on."""
+    """Iterates voiced utterances detected by Silero VAD, always-on.
+
+    Two backends for the same model. Where `silero-vad` (and therefore torch)
+    is installed - macOS - it is used unchanged. Where it is not, which is every
+    Windows install because the bundle excludes torch on purpose, the identical
+    weights run through onnxruntime instead. This used to raise SystemExit and
+    hands-free simply did not exist on Windows."""
+
+    # Class-level so the torch tests, which build instances with
+    # object.__new__ to skip loading a real model, still find it.
+    _impl = None
 
     def __init__(self) -> None:
+        self._impl = None
         try:
             from silero_vad import load_silero_vad, VADIterator
         except ImportError:
-            raise SystemExit(
-                "[Audio] silero-vad not installed: pip install silero-vad"
-            )
+            from laris.vad_onnx import OnnxVadCapture
+            self._impl = OnnxVadCapture()
+            return
         self._model = load_silero_vad()
         self._VADIterator = VADIterator
 
@@ -148,6 +159,11 @@ class VadCapture:
         should_stop: Callable[[], bool] | None = None,
         on_chunk: Callable[[np.ndarray], None] | None = None,
     ) -> Generator[_Utterance, None, None]:
+        if self._impl is not None:
+            yield from self._impl.stream_utterances(
+                should_stop=should_stop, on_chunk=on_chunk
+            )
+            return
         import torch
 
         vad = self._VADIterator(
