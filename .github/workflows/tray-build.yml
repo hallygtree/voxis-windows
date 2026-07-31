@@ -69,10 +69,24 @@ jobs:
           ref: v1.9.1
           path: whisper.cpp
 
+      # Reuse the binaries across releases. ggml keeps no VkPipelineCache of its
+      # own, so the driver's on-disk shader cache is all there is - and it is
+      # keyed by the binary. Recompiling every run produced a different
+      # ggml-vulkan.dll each time, which made every VOXIS update cost the user
+      # another ~11s of shader compilation on their first transcription. The key
+      # covers everything that changes the output.
+      - name: Cache whisper.cpp build
+        if: matrix.platform == 'windows-latest'
+        id: whispercpp-cache
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+        with:
+          path: whisper.cpp/build/bin/Release
+          key: whispercpp-v1.9.1-vulkan1.4.313.2-cpuvariants-${{ runner.os }}
+
       # Install recipe mirrored from llama.cpp's own release workflow, which
       # exercises the same ggml Vulkan backend every release.
       - name: Install Vulkan SDK
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && steps.whispercpp-cache.outputs.cache-hit != 'true'
         shell: pwsh
         env:
           VULKAN_VERSION: 1.4.313.2
@@ -87,7 +101,7 @@ jobs:
       # directory is missing rather than shipping an engine that cannot
       # transcribe - it is packaged windowed, so that would fail in silence.
       - name: Build whisper.cpp (Vulkan)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && steps.whispercpp-cache.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: whisper.cpp
         run: |
@@ -102,13 +116,24 @@ jobs:
           # combination llama.cpp uses for its redistributable releases.
           cmake -B build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=ON -DGGML_BACKEND_DL=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=ON
           cmake --build build --config Release -j 4
+
+      # Separate from the build so it still runs on a cache hit, and so a cache
+      # that restored something unusable fails here rather than shipping an
+      # engine that cannot transcribe.
+      - name: Stage whisper.cpp for both engines
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: whisper.cpp
+        run: |
           foreach ($dest in @("../packages/laris/whispercpp", "../packages/miris/whispercpp")) {
             New-Item -ItemType Directory -Force -Path $dest | Out-Null
             Copy-Item build/bin/Release/*.exe $dest -Force
             Copy-Item build/bin/Release/*.dll $dest -Force
           }
-          if (-not (Test-Path ../packages/laris/whispercpp/whisper-server.exe)) {
-            throw "whisper-server.exe was not produced - the engines cannot transcribe without it"
+          foreach ($needed in @("whisper-server.exe", "parakeet-cli.exe", "ggml-vulkan.dll")) {
+            if (-not (Test-Path "../packages/laris/whispercpp/$needed")) {
+              throw "$needed is missing - the engines cannot transcribe without it"
+            }
           }
           Get-ChildItem ../packages/laris/whispercpp | ForEach-Object { "{0,12:N0}  {1}" -f $_.Length, $_.Name }
 

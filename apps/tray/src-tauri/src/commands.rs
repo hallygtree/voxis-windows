@@ -90,16 +90,23 @@ pub async fn save_laris_settings(
     }
     let path = settings::laris_settings_path();
     let mut map = settings::read_json_map(&path);
+    // The settings window submits every laris field on every save, so pressing
+    // Save without touching anything used to restart the engine and re-pay the
+    // whole model load. Every one of these keys is read at boot, so a real
+    // change does need the restart - but an unchanged form does not.
+    let changed = updates.iter().any(|(k, v)| map.get(k) != Some(v));
     for (k, v) in updates {
         map.insert(k, v);
     }
     settings::write_json_atomic(&path, &serde_json::Value::Object(map))?;
     // apply immediately when the tray owns the daemon (settings load at boot)
-    let state = app.state::<AppState>();
-    let mut daemon = state.daemon.lock().unwrap();
-    if daemon.owns_running() {
-        daemon.stop();
-        daemon.spawn()?;
+    if changed {
+        let state = app.state::<AppState>();
+        let mut daemon = state.daemon.lock().unwrap();
+        if daemon.owns_running() {
+            daemon.stop();
+            daemon.spawn()?;
+        }
     }
     Ok(())
 }

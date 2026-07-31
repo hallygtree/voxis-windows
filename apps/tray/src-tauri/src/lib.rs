@@ -416,7 +416,21 @@ pub fn run() {
             std::thread::spawn(move || {
                 let mut last = snap;
                 loop {
-                    std::thread::sleep(Duration::from_secs(2));
+                    // Sleep in slices instead of one 2s block: when the
+                    // long-poll thread flags the menu dirty - which is how
+                    // "carregando modelo..." turns into a usable menu - the
+                    // repaint lands in ~250ms rather than waiting out the rest
+                    // of the tick. The tick itself stays at 2s; only the
+                    // reaction to an explicit flag is faster.
+                    {
+                        let state = handle.state::<AppState>();
+                        for _ in 0..8 {
+                            std::thread::sleep(Duration::from_millis(250));
+                            if state.menu_dirty.load(Ordering::SeqCst) {
+                                break;
+                            }
+                        }
+                    }
                     let state = handle.state::<AppState>();
                     let dirty = state.menu_dirty.swap(false, Ordering::SeqCst);
                     let current = take_snapshot(&handle, &state);
@@ -479,7 +493,11 @@ pub fn run() {
                     };
                     match laris::get_overlay_state(&peer, serial, 20.0) {
                         Ok(state) => {
-                            backoff = Duration::from_secs(1);
+                            // The request itself long-polls for up to 20s, so
+                            // sleeping a whole second between calls only delays
+                            // noticing the next change. Keep it short on the
+                            // success path; the error path still backs off.
+                            backoff = Duration::from_millis(100);
                             // Publish readiness for the menu label. Flag the menu
                             // dirty on change so the next 2s tick rebuilds it even
                             // though nothing else in the snapshot moved.
