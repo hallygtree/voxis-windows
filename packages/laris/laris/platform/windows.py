@@ -38,6 +38,14 @@ class WindowsBackend:
     def __init__(self) -> None:
         self._stt = None
         self._stt_lock = threading.Lock()
+        self._status_sink = None
+
+    def set_status_sink(self, sink) -> None:
+        """Where to publish boot progress ("baixando modelo 43%"). Injected by
+        daemon.run rather than taken in __init__, matching how the orb state is
+        handed to make_overlay - the backend is built before the caller has
+        decided who listens. Must be set before the transcriber is built."""
+        self._status_sink = sink
 
     def _transcriber(self):
         """Built on first use, not in __init__.
@@ -54,7 +62,8 @@ class WindowsBackend:
                 # Dictation only needs text, so the fast Parakeet fallback is
                 # allowed when there is no GPU. Miris opts out of it - see
                 # miris/pipeline.py.
-                self._stt = WhisperCppTranscriber(allow_parakeet=True)
+                self._stt = WhisperCppTranscriber(allow_parakeet=True,
+                                                  on_status=self._status_sink)
             return self._stt
 
     def stt_usable(self) -> bool:

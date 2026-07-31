@@ -128,3 +128,46 @@ def test_orb_state_concurrent_show_hide():
     # No crashes, and final state should be valid
     snapshot = state.snapshot()
     assert snapshot.serial >= 1
+
+
+def test_set_status_bumps_serial_only_when_the_text_changes():
+    """The tray rebuilds its whole menu on the main thread for every serial
+    change, so a download counter that reported every byte would spend more
+    effort repainting than downloading."""
+    from laris.orb_state import OrbStateManager
+
+    state = OrbStateManager()
+    before = state.snapshot().serial
+
+    state.set_status("baixando modelo 10%")
+    first = state.snapshot()
+    assert first.status == "baixando modelo 10%"
+    assert first.serial == before + 1
+
+    state.set_status("baixando modelo 10%")          # same text
+    assert state.snapshot().serial == first.serial
+
+    state.set_status(None)
+    assert state.snapshot().status is None
+    assert state.snapshot().serial == first.serial + 1
+
+
+def test_status_wakes_a_waiting_long_poll():
+    """The tray is parked in wait_for_change; progress it never learns about is
+    progress the user never sees."""
+    import threading
+    from laris.orb_state import OrbStateManager
+
+    state = OrbStateManager()
+    seen = []
+
+    def waiter():
+        seen.append(state.wait_for_change(state.snapshot().serial, timeout=5.0))
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    time.sleep(0.05)
+    state.set_status("carregando modelo")
+    thread.join(5)
+
+    assert seen and seen[0].status == "carregando modelo"

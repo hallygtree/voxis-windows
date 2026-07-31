@@ -17,6 +17,7 @@ from laris import whispercpp_runtime as runtime
 # Captured at import: the autouse fixture below stubs runtime.vulkan_devices so
 # the construction tests see "no GPU", but the caching tests need the real one.
 _REAL_VULKAN_DEVICES = runtime.vulkan_devices
+_REAL_ENSURE_MODEL = runtime.ensure_model
 
 # verbatim from `whisper-cli --help` on a laptop with both an iGPU and a dGPU
 BANNER = """ggml_vulkan: Found 2 Vulkan devices:
@@ -60,7 +61,7 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setenv("VOXIS_STATE_DIR", str(tmp_path / "state"))
     # a Path, like the real ensure_model - callers read .name off it
     monkeypatch.setattr(runtime, "ensure_model",
-                        lambda spec: pathlib.Path("/models") / spec.filename)
+                        lambda spec, on_status=None: pathlib.Path("/models") / spec.filename)
     monkeypatch.setattr(runtime, "WhisperServer", FakeServer)
     monkeypatch.setattr(runtime, "vulkan_devices", lambda: [])
 
@@ -298,6 +299,45 @@ def test_corrupt_probe_cache_falls_back_to_probing(monkeypatch, tmp_path):
 
     assert _REAL_VULKAN_DEVICES() == [IGPU]
     assert len(calls) == 1
+
+
+def test_model_download_reports_progress_without_flooding(monkeypatch, tmp_path):
+    """A 547 MB download with no visible sign of life reads as a hung app. But
+    every report repaints the tray menu on its main thread, so it must not fire
+    once per chunk either."""
+    monkeypatch.setenv("VOXIS_MODELS_DIR", str(tmp_path))
+    spec = runtime.ModelSpec(filename="m.bin", url="http://example/m.bin", size=8)
+
+    class FakeResponse:
+        def __init__(self):
+            self._chunks = [b"ab", b"cd", b"ef", b"gh"]
+        def read(self, _n):
+            return self._chunks.pop(0) if self._chunks else b""
+        def __enter__(self):
+            return self
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(runtime.urllib.request, "urlopen",
+                        lambda *a, **k: FakeResponse())
+    reports = []
+    path = _REAL_ENSURE_MODEL(spec, reports.append)
+
+    assert path.read_bytes() == b"abcdefgh"
+    assert reports and reports[0].startswith("baixando modelo 0%")
+    # four chunks, but the per-second throttle keeps this well under four
+    assert len(reports) < 4
+
+
+def test_download_of_an_already_present_model_reports_nothing(monkeypatch, tmp_path):
+    """Nothing to show when there is nothing to wait for."""
+    monkeypatch.setenv("VOXIS_MODELS_DIR", str(tmp_path))
+    spec = runtime.ModelSpec(filename="m.bin", url="http://example/m.bin", size=3)
+    (tmp_path / "m.bin").write_bytes(b"abc")
+
+    reports = []
+    assert _REAL_ENSURE_MODEL(spec, reports.append).name == "m.bin"
+    assert reports == []
 
 
 def test_parakeet_path_shells_out_and_cleans_up(monkeypatch, tmp_path):

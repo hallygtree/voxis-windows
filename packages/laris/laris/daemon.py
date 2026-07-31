@@ -147,6 +147,12 @@ def run(
     ptt = PushToTalk(config.DICTATE_KEY)
     ptt.start()
 
+    # Publish boot progress to the tray's menu label while it loads. Optional
+    # and duck-typed: macOS has no such method and needs none.
+    sink = getattr(backend, "set_status_sink", None)
+    if sink is not None and orb_state is not None:
+        sink(orb_state.set_status)
+
     def _warm_backend():
         """Loading the model costs seconds; the hotkey costs nothing. Warming
         on a background thread means the key above is already live, so a press
@@ -159,10 +165,17 @@ def run(
         usable = getattr(backend, "stt_usable", None)
         if usable is not None and not usable():
             print("[Voice] transcricao indisponivel - o tray nao vai marcar pronto")
+            if orb_state is not None:
+                # The label is the only place a user sees this; leaving it on
+                # the last progress step would read as "still loading" forever.
+                orb_state.set_status("transcricao indisponivel")
             return
         print(f"[Voice] modelo pronto em {time.monotonic() - started:.1f}s")
         if orb_state is not None:
+            # ready first: the label only shows status while not ready, so this
+            # order gives one visible transition instead of two.
             orb_state.set_ready(True)
+            orb_state.set_status(None)
 
     threading.Thread(target=_warm_backend, name="laris-warm", daemon=True).start()
     vad = None

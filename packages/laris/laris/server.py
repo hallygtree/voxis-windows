@@ -79,6 +79,7 @@ def build_app(token: str, voice_queue: "thread_queue.Queue[VoiceEvent] | None" =
             "ready": snapshot.ready,
             "mode": snapshot.mode,
             "serial": snapshot.serial,
+            "status": snapshot.status,
         }
 
     @app.post("/theme")

@@ -235,9 +235,12 @@ def best_device(devices: list[VulkanDevice]) -> VulkanDevice | None:
     return devices[0]
 
 
-def ensure_model(spec: ModelSpec) -> Path:
+def ensure_model(spec: ModelSpec, on_status=None) -> Path:
     """Download the model on first use. Only the model for the backend actually
-    chosen is fetched - a GPU machine never downloads Parakeet and vice versa."""
+    chosen is fetched - a GPU machine never downloads Parakeet and vice versa.
+
+    on_status: optional callback receiving human-readable progress for the
+    tray. Reports are deliberately coarse - see below."""
     path = models_dir() / spec.filename
     if path.exists() and path.stat().st_size == spec.size:
         return path
@@ -246,10 +249,26 @@ def ensure_model(spec: ModelSpec) -> Path:
               f"{spec.size} bytes); re-downloading")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".part")
-    print(f"[STT] downloading {spec.filename} ({spec.size / 1048576:.0f} MB)...")
+    total_mb = spec.size / 1048576
+    print(f"[STT] downloading {spec.filename} ({total_mb:.0f} MB)...")
+    if on_status is not None:
+        on_status(f"baixando modelo 0% de {total_mb:.0f} MB")
+    downloaded = 0
+    last_pct, last_report = -1, 0.0
     with urllib.request.urlopen(spec.url, timeout=60) as resp, open(tmp, "wb") as out:
         while chunk := resp.read(1 << 20):
             out.write(chunk)
+            downloaded += len(chunk)
+            if on_status is None:
+                continue
+            pct = min(100, downloaded * 100 // max(1, spec.size))
+            now = time.monotonic()
+            # At most one report per percent AND per second: every change
+            # rebuilds the tray menu on its main thread, so a finer-grained
+            # counter would spend more effort repainting than downloading.
+            if pct != last_pct and now - last_report >= 1.0:
+                last_pct, last_report = pct, now
+                on_status(f"baixando modelo {pct}% de {total_mb:.0f} MB")
     got = tmp.stat().st_size
     if got != spec.size:
         tmp.unlink(missing_ok=True)
@@ -259,19 +278,19 @@ def ensure_model(spec: ModelSpec) -> Path:
     return path
 
 
-def resolve_whisper_model(name: str) -> Path:
+def resolve_whisper_model(name: str, on_status=None) -> Path:
     """Honour config.STT_MODEL_GGML. The default name downloads on demand;
     anything else has to exist already (in the models dir or as a path),
     because there is no download URL for an arbitrary ggml file."""
     name = (name or "").strip()
     if not name or name == WHISPER_MODEL.filename:
-        return ensure_model(WHISPER_MODEL)
+        return ensure_model(WHISPER_MODEL, on_status)
     for candidate in (models_dir() / name, Path(name).expanduser()):
         if candidate.is_file():
             return candidate
     print(f"[STT] {name} not found in {models_dir()}; "
           f"falling back to {WHISPER_MODEL.filename}")
-    return ensure_model(WHISPER_MODEL)
+    return ensure_model(WHISPER_MODEL, on_status)
 
 
 def _free_port() -> int:

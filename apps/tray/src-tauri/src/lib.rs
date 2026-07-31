@@ -36,6 +36,10 @@ pub struct AppState {
     /// take_snapshot: uvicorn answers well before the model is loaded, so
     /// `laris_alive` alone would tell the user dictation is ready too early.
     pub orb_ready: AtomicBool,
+    /// Boot progress published by the long-poll thread, rendered in the
+    /// dictation menu label while the engine is not ready. A 547 MB download
+    /// with no visible sign of life reads as a hung app.
+    pub boot_status: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -48,6 +52,7 @@ struct Snapshot {
     has_last_note: bool,
     theme: Option<(String, String, String)>, // (archetype, palette, position)
     rect: Option<overlay::OrbRect>, // position and size in logical pixels
+    boot_status: Option<String>, // what the engine is doing while !ready
 }
 
 fn peers_path() -> PathBuf {
@@ -146,6 +151,8 @@ fn take_snapshot(app: &tauri::AppHandle, state: &AppState) -> Snapshot {
         has_last_note: miris::last_note(&sessions).is_some(),
         theme,
         rect,
+        // Owned by the long-poll thread, same as `ready` above.
+        boot_status: state.boot_status.lock().ok().and_then(|s| s.clone()),
     }
 }
 
@@ -160,7 +167,14 @@ fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
     let last_note =
         MenuItem::with_id(app, "last_note", "Última nota", snap.has_last_note, None::<&str>)?;
     let dictation_label = if snap.laris_alive && !snap.ready {
-        "Ditado (carregando modelo…)".to_string()
+        // The engine reports what it is actually doing - downloading the model,
+        // loading it, compiling GPU shaders. Falls back to the generic wording
+        // when it has not said anything yet, or when it is an older engine that
+        // does not report at all.
+        match snap.boot_status.as_deref() {
+            Some(status) if !status.is_empty() => format!("Ditado ({status})"),
+            _ => "Ditado (carregando modelo…)".to_string(),
+        }
     } else {
         "Ditado".to_string()
     };
@@ -390,6 +404,7 @@ pub fn run() {
                 menu_dirty: AtomicBool::new(false),
                 last_orb_rect: Mutex::new(None),
                 orb_ready: AtomicBool::new(false),
+                boot_status: Mutex::new(None),
             });
 
             let snap = take_snapshot(app.handle(), &app.state::<AppState>());
@@ -504,7 +519,18 @@ pub fn run() {
                             {
                                 let app_state = handle_lp.state::<AppState>();
                                 let was = app_state.orb_ready.swap(state.ready, Ordering::SeqCst);
-                                if was != state.ready {
+                                let mut dirty = was != state.ready;
+                                // The engine only bumps its serial when the
+                                // text actually changes, so this compare is
+                                // what keeps a download from repainting the
+                                // menu more often than it advances.
+                                if let Ok(mut current) = app_state.boot_status.lock() {
+                                    if *current != state.status {
+                                        *current = state.status.clone();
+                                        dirty = true;
+                                    }
+                                }
+                                if dirty {
                                     app_state.menu_dirty.store(true, Ordering::SeqCst);
                                 }
                             }

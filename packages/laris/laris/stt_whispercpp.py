@@ -59,7 +59,11 @@ def _wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
 
 
 class WhisperCppTranscriber:
-    def __init__(self, allow_parakeet: bool = True) -> None:
+    def __init__(self, allow_parakeet: bool = True, on_status=None) -> None:
+        # on_status: optional sink for human-readable boot progress. The tray
+        # shows it in the menu while the engine is not ready yet - a 547 MB
+        # download with no visible sign of life reads as a hung app.
+        self._on_status = on_status if on_status is not None else (lambda _text: None)
         self.backend = "unavailable"
         self.device = "none"
         self._server: runtime.WhisperServer | None = None
@@ -87,6 +91,7 @@ class WhisperCppTranscriber:
         # undiagnosable from a user's laris-engine.log - which already cost one
         # wrong diagnosis on someone else's machine.
         started = time.monotonic()
+        self._on_status("procurando GPU")
         devices = runtime.vulkan_devices()
         print(f"[STT] gpu probe {time.monotonic() - started:.2f}s "
               f"({len(devices)} device(s))")
@@ -101,8 +106,9 @@ class WhisperCppTranscriber:
         self.backend = "whisper"
         self.device = f"vulkan:{device.index} ({device.name})" if device else "cpu"
         started = time.monotonic()
-        model = runtime.resolve_whisper_model(config.STT_MODEL_GGML)
+        model = runtime.resolve_whisper_model(config.STT_MODEL_GGML, self._on_status)
         fetched = time.monotonic()
+        self._on_status("carregando modelo")
         server = runtime.WhisperServer(model, device, config.STT_LANGUAGE)
         server.start()
         self._server = server
@@ -113,7 +119,8 @@ class WhisperCppTranscriber:
     def _start_parakeet(self) -> None:
         self.backend = "parakeet"
         self.device = "cpu"
-        self._parakeet_model = runtime.ensure_model(runtime.PARAKEET_MODEL)
+        self._parakeet_model = runtime.ensure_model(runtime.PARAKEET_MODEL,
+                                                    self._on_status)
         print("[STT] no GPU found; using Parakeet TDT v3 on cpu (faster than "
               "Whisper on cpu, but 25 languages and weaker punctuation)")
 
@@ -122,6 +129,10 @@ class WhisperCppTranscriber:
         compilation (~25s measured; the driver caches it, so later launches are
         under a second). Never raises: daemon.run calls it unguarded."""
         started = time.monotonic()
+        # The GPU path compiles shaders on this first inference, and on a build
+        # the driver has not cached it is the longest single step of the boot.
+        self._on_status("preparando GPU" if self.device.startswith("vulkan")
+                        else "preparando transcricao")
         try:
             self.transcribe(np.zeros(config.SAMPLE_RATE // 2, dtype=np.float32))
         except Exception as exc:  # noqa: BLE001

@@ -18,6 +18,9 @@ class OrbState:
     ready: bool
     mode: str | None
     serial: int
+    # Human-readable boot progress ("baixando modelo 43%"), shown by the tray
+    # while ready is still false. None once there is nothing to report.
+    status: str | None = None
 
 
 class OrbStateManager:
@@ -33,6 +36,7 @@ class OrbStateManager:
         self._visible = False
         self._ready = False
         self._mode: str | None = None
+        self._status: str | None = None
         self._serial = 1
 
     def snapshot(self) -> OrbState:
@@ -43,6 +47,7 @@ class OrbStateManager:
                 ready=self._ready,
                 mode=self._mode,
                 serial=self._serial,
+                status=self._status,
             )
 
     def show(self, mode: str) -> None:
@@ -62,6 +67,20 @@ class OrbStateManager:
             if self._visible or self._mode is not None:
                 self._visible = False
                 self._mode = None
+                self._serial += 1
+                self._event.set()
+                self._event.clear()
+
+    def set_status(self, status: str | None) -> None:
+        """Publish boot progress for the tray's menu label.
+
+        Only bumps the serial when the text actually changes: the tray rebuilds
+        its whole menu on the main thread for every serial change, so a
+        percentage that ticked every byte would spend more time repainting than
+        downloading. Callers are expected to coarsen their own updates too."""
+        with self._lock:
+            if self._status != status:
+                self._status = status
                 self._serial += 1
                 self._event.set()
                 self._event.clear()

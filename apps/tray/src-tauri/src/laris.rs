@@ -78,6 +78,10 @@ pub struct OverlayState {
     #[serde(default)]
     pub mode: Option<String>,
     pub serial: i64,
+    /// Human-readable boot progress ("baixando modelo 43%"), shown in the menu
+    /// while `ready` is false. Defaulted so an older engine still parses.
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 /// Long-poll the overlay state. If serial != since, returns immediately with
