@@ -63,7 +63,8 @@ class WhisperCppTranscriber:
         # on_status: optional sink for human-readable boot progress. The tray
         # shows it in the menu while the engine is not ready yet - a 547 MB
         # download with no visible sign of life reads as a hung app.
-        self._on_status = on_status if on_status is not None else (lambda _text: None)
+        self._on_status = (on_status if on_status is not None
+                           else (lambda _text, _progress=None: None))
         self.backend = "unavailable"
         self.device = "none"
         self._server: runtime.WhisperServer | None = None

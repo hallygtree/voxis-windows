@@ -252,7 +252,7 @@ def ensure_model(spec: ModelSpec, on_status=None) -> Path:
     total_mb = spec.size / 1048576
     print(f"[STT] downloading {spec.filename} ({total_mb:.0f} MB)...")
     if on_status is not None:
-        on_status(f"baixando modelo 0% de {total_mb:.0f} MB")
+        on_status(f"baixando modelo 0% de {total_mb:.0f} MB", 0.0)
     downloaded = 0
     last_pct, last_report = -1, 0.0
     with urllib.request.urlopen(spec.url, timeout=60) as resp, open(tmp, "wb") as out:
@@ -268,7 +268,7 @@ def ensure_model(spec: ModelSpec, on_status=None) -> Path:
             # counter would spend more effort repainting than downloading.
             if pct != last_pct and now - last_report >= 1.0:
                 last_pct, last_report = pct, now
-                on_status(f"baixando modelo {pct}% de {total_mb:.0f} MB")
+                on_status(f"baixando modelo {pct}% de {total_mb:.0f} MB", pct / 100.0)
     got = tmp.stat().st_size
     if got != spec.size:
         tmp.unlink(missing_ok=True)

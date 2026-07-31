@@ -20,6 +20,14 @@ const POSITIONS: [&str; 6] = [
     "center", "top-left", "top-center", "top-right", "bottom-left", "bottom-right",
 ];
 
+/// What the engine is doing while it boots. Text and fraction travel together
+/// so the menu label and the bar can never disagree.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BootStatus {
+    pub text: Option<String>,
+    pub progress: Option<f64>,
+}
+
 pub struct AppState {
     pub config: settings::TrayConfig,
     pub daemon: Mutex<laris::LarisDaemon>,
@@ -37,9 +45,10 @@ pub struct AppState {
     /// `laris_alive` alone would tell the user dictation is ready too early.
     pub orb_ready: AtomicBool,
     /// Boot progress published by the long-poll thread, rendered in the
-    /// dictation menu label while the engine is not ready. A 547 MB download
-    /// with no visible sign of life reads as a hung app.
-    pub boot_status: Mutex<Option<String>>,
+    /// dictation menu label and the tray tooltip while the engine is not
+    /// ready. A 547 MB download with no visible sign of life reads as a hung
+    /// app.
+    pub boot_status: Mutex<BootStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -52,7 +61,7 @@ struct Snapshot {
     has_last_note: bool,
     theme: Option<(String, String, String)>, // (archetype, palette, position)
     rect: Option<overlay::OrbRect>, // position and size in logical pixels
-    boot_status: Option<String>, // what the engine is doing while !ready
+    boot_status: BootStatus, // what the engine is doing while !ready
 }
 
 fn peers_path() -> PathBuf {
@@ -152,8 +161,41 @@ fn take_snapshot(app: &tauri::AppHandle, state: &AppState) -> Snapshot {
         theme,
         rect,
         // Owned by the long-poll thread, same as `ready` above.
-        boot_status: state.boot_status.lock().ok().and_then(|s| s.clone()),
+        boot_status: state.boot_status.lock().map(|s| s.clone()).unwrap_or_default(),
     }
+}
+
+/// `0.43` -> `████░░░░░░ 43%`. A native menu item is text, so the "bar" is
+/// block characters; there is no progress widget to use.
+fn progress_bar(fraction: f64) -> String {
+    const CELLS: usize = 10;
+    let clamped = fraction.clamp(0.0, 1.0);
+    let filled = (clamped * CELLS as f64).round() as usize;
+    format!(
+        "{}{} {:.0}%",
+        "\u{2588}".repeat(filled),
+        "\u{2591}".repeat(CELLS - filled),
+        clamped * 100.0
+    )
+}
+
+/// Hover text for the tray icon. This is the only place boot progress is
+/// visible without opening the menu - and a menu that is already open does not
+/// repaint, so it is where the live value actually lands.
+fn tray_tooltip(snap: &Snapshot) -> String {
+    if snap.laris_alive && !snap.ready {
+        if let Some(text) = snap.boot_status.text.as_deref() {
+            return match snap.boot_status.progress {
+                Some(p) => format!("VOXIS - {text}\n{}", progress_bar(p)),
+                None => format!("VOXIS - {text}"),
+            };
+        }
+        return "VOXIS - carregando modelo...".to_string();
+    }
+    if snap.recording.is_some() {
+        return "VOXIS - reuniao em andamento".to_string();
+    }
+    "VOXIS".to_string()
 }
 
 fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
@@ -171,8 +213,11 @@ fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
         // loading it, compiling GPU shaders. Falls back to the generic wording
         // when it has not said anything yet, or when it is an older engine that
         // does not report at all.
-        match snap.boot_status.as_deref() {
-            Some(status) if !status.is_empty() => format!("Ditado ({status})"),
+        match (snap.boot_status.text.as_deref(), snap.boot_status.progress) {
+            (Some(status), Some(p)) if !status.is_empty() => {
+                format!("Ditado {} - {status}", progress_bar(p))
+            }
+            (Some(status), None) if !status.is_empty() => format!("Ditado ({status})"),
             _ => "Ditado (carregando modelo…)".to_string(),
         }
     } else {
@@ -404,7 +449,7 @@ pub fn run() {
                 menu_dirty: AtomicBool::new(false),
                 last_orb_rect: Mutex::new(None),
                 orb_ready: AtomicBool::new(false),
-                boot_status: Mutex::new(None),
+                boot_status: Mutex::new(BootStatus::default()),
             });
 
             let snap = take_snapshot(app.handle(), &app.state::<AppState>());
@@ -465,6 +510,11 @@ pub fn run() {
                             if let Ok(menu) = build_menu(&handle2, &current) {
                                 let _ = tray.set_menu(Some(menu));
                             }
+                            // The menu only exists while the user holds it
+                            // open, and an open native menu does not repaint -
+                            // the tooltip is where a changing value is
+                            // actually seen.
+                            let _ = tray.set_tooltip(Some(tray_tooltip(&current)));
                             if recording_changed {
                                 set_tray_icon(&tray, current.recording.is_some());
                             }
@@ -520,13 +570,17 @@ pub fn run() {
                                 let app_state = handle_lp.state::<AppState>();
                                 let was = app_state.orb_ready.swap(state.ready, Ordering::SeqCst);
                                 let mut dirty = was != state.ready;
-                                // The engine only bumps its serial when the
-                                // text actually changes, so this compare is
-                                // what keeps a download from repainting the
-                                // menu more often than it advances.
+                                // The engine only bumps its serial when this
+                                // actually changes, so this compare is what
+                                // keeps a download from repainting the menu
+                                // more often than it advances.
+                                let incoming = BootStatus {
+                                    text: state.status.clone(),
+                                    progress: state.progress,
+                                };
                                 if let Ok(mut current) = app_state.boot_status.lock() {
-                                    if *current != state.status {
-                                        *current = state.status.clone();
+                                    if *current != incoming {
+                                        *current = incoming;
                                         dirty = true;
                                     }
                                 }
@@ -569,4 +623,55 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_bar_fills_proportionally() {
+        assert_eq!(progress_bar(0.0), "░░░░░░░░░░ 0%");
+        assert_eq!(progress_bar(1.0), "██████████ 100%");
+        assert_eq!(progress_bar(0.5), "█████░░░░░ 50%");
+        // 10 cells, so 43% rounds to 4 filled - the label keeps the real value
+        assert_eq!(progress_bar(0.43), "████░░░░░░ 43%");
+    }
+
+    #[test]
+    fn progress_bar_clamps_instead_of_panicking() {
+        // repeat() on a negative-turned-huge count would panic, and a bad
+        // number from the engine must not take the tray down
+        assert_eq!(progress_bar(-1.0), "░░░░░░░░░░ 0%");
+        assert_eq!(progress_bar(2.5), "██████████ 100%");
+    }
+
+    fn loading(text: &str, progress: Option<f64>) -> Snapshot {
+        Snapshot {
+            laris_alive: true,
+            ready: false,
+            boot_status: BootStatus { text: Some(text.to_string()), progress },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tooltip_shows_the_bar_while_loading() {
+        let tip = tray_tooltip(&loading("baixando modelo 43% de 547 MB", Some(0.43)));
+        assert!(tip.contains("baixando modelo"), "{tip}");
+        assert!(tip.contains("████"), "{tip}");
+    }
+
+    #[test]
+    fn tooltip_without_a_fraction_omits_the_bar() {
+        let tip = tray_tooltip(&loading("carregando modelo", None));
+        assert!(tip.contains("carregando modelo"), "{tip}");
+        assert!(!tip.contains('█'), "{tip}");
+    }
+
+    #[test]
+    fn tooltip_is_plain_once_ready() {
+        let snap = Snapshot { laris_alive: true, ready: true, ..Default::default() };
+        assert_eq!(tray_tooltip(&snap), "VOXIS");
+    }
 }

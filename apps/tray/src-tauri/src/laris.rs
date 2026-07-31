@@ -82,6 +82,10 @@ pub struct OverlayState {
     /// while `ready` is false. Defaulted so an older engine still parses.
     #[serde(default)]
     pub status: Option<String>,
+    /// 0.0-1.0 when the phase has a measurable fraction. Sent as a number
+    /// rather than parsed back out of `status`, which is localized text.
+    #[serde(default)]
+    pub progress: Option<f64>,
 }
 
 /// Long-poll the overlay state. If serial != since, returns immediately with

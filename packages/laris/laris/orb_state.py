@@ -21,6 +21,10 @@ class OrbState:
     # Human-readable boot progress ("baixando modelo 43%"), shown by the tray
     # while ready is still false. None once there is nothing to report.
     status: str | None = None
+    # 0.0-1.0 when the phase has a measurable fraction, None otherwise. Kept
+    # separate from the text so the tray can draw a bar without reparsing a
+    # localized string.
+    progress: float | None = None
 
 
 class OrbStateManager:
@@ -37,6 +41,7 @@ class OrbStateManager:
         self._ready = False
         self._mode: str | None = None
         self._status: str | None = None
+        self._progress: float | None = None
         self._serial = 1
 
     def snapshot(self) -> OrbState:
@@ -48,6 +53,7 @@ class OrbStateManager:
                 mode=self._mode,
                 serial=self._serial,
                 status=self._status,
+                progress=self._progress,
             )
 
     def show(self, mode: str) -> None:
@@ -71,16 +77,17 @@ class OrbStateManager:
                 self._event.set()
                 self._event.clear()
 
-    def set_status(self, status: str | None) -> None:
-        """Publish boot progress for the tray's menu label.
+    def set_status(self, status: str | None, progress: float | None = None) -> None:
+        """Publish boot progress for the tray's menu label and tooltip.
 
-        Only bumps the serial when the text actually changes: the tray rebuilds
+        Only bumps the serial when something actually changes: the tray rebuilds
         its whole menu on the main thread for every serial change, so a
         percentage that ticked every byte would spend more time repainting than
         downloading. Callers are expected to coarsen their own updates too."""
         with self._lock:
-            if self._status != status:
+            if self._status != status or self._progress != progress:
                 self._status = status
+                self._progress = progress
                 self._serial += 1
                 self._event.set()
                 self._event.clear()

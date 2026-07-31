@@ -321,10 +321,15 @@ def test_model_download_reports_progress_without_flooding(monkeypatch, tmp_path)
     monkeypatch.setattr(runtime.urllib.request, "urlopen",
                         lambda *a, **k: FakeResponse())
     reports = []
-    path = _REAL_ENSURE_MODEL(spec, reports.append)
+    path = _REAL_ENSURE_MODEL(spec, lambda text, progress=None:
+                              reports.append((text, progress)))
 
     assert path.read_bytes() == b"abcdefgh"
-    assert reports and reports[0].startswith("baixando modelo 0%")
+    assert reports and reports[0][0].startswith("baixando modelo 0%")
+    # the fraction travels as a number so the tray can draw a bar without
+    # reparsing a localized string
+    assert reports[0][1] == 0.0
+    assert all(p is None or 0.0 <= p <= 1.0 for _t, p in reports)
     # four chunks, but the per-second throttle keeps this well under four
     assert len(reports) < 4
 
@@ -336,7 +341,8 @@ def test_download_of_an_already_present_model_reports_nothing(monkeypatch, tmp_p
     (tmp_path / "m.bin").write_bytes(b"abc")
 
     reports = []
-    assert _REAL_ENSURE_MODEL(spec, reports.append).name == "m.bin"
+    sink = lambda text, progress=None: reports.append((text, progress))  # noqa: E731
+    assert _REAL_ENSURE_MODEL(spec, sink).name == "m.bin"
     assert reports == []
 
 
