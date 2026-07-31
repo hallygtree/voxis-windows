@@ -90,6 +90,21 @@ jobs:
           }
           Get-ChildItem ../packages/laris/whispercpp | ForEach-Object { "{0,12:N0}  {1}" -f $_.Length, $_.Name }
 
+      # Silero VAD for hands-free: pinned tag, MIT, 2.2 MB. Shipped in the
+      # installer rather than downloaded on first use - a file this small does
+      # not justify another wait. laris.spec hard-fails without it instead of
+      # producing an engine whose hands-free toggle silently does nothing.
+      - name: Fetch the Silero VAD model
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path packages/laris/assets | Out-Null
+          curl.exe -sSL --fail -o packages/laris/assets/silero_vad.onnx `
+            "https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx"
+          $size = (Get-Item packages/laris/assets/silero_vad.onnx).Length
+          "silero_vad.onnx: {0:N0} bytes" -f $size
+          if ($size -lt 500000) { throw "silero_vad.onnx looks truncated ($size bytes)" }
+
       - name: Build frozen laris engine (Windows)
         if: matrix.platform == 'windows-latest'
         working-directory: packages/laris

@@ -6,6 +6,11 @@
 # binaries (see laris/whispercpp_runtime.py), which are native executables
 # staged by the build rather than Python dependencies. faster-whisper was
 # dropped with the CTranslate2 backend - it could only use a GPU on NVIDIA.
+#
+# onnxruntime is here for voice activity detection only: hands-free needs a VAD
+# and the silero-vad package would pull torch, so the same Silero weights run
+# through ONNX instead. The model itself ships in the installer.
+onnxruntime>=1.17
 sounddevice>=0.4.6
 pynput>=1.8.2
 pyperclip>=1.8

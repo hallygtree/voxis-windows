@@ -28,11 +28,27 @@ else:
         "fail silently at runtime)."
     )
 
+# Silero VAD, 2.2 MB, MIT. Hands-free needs voice activity detection and the
+# silero-vad package would drag torch in, so the same weights run through
+# onnxruntime instead. Small enough to ship rather than make the user wait on
+# another download the first time they double-tap.
+_assets = Path(SPECPATH).parent / "assets"
+if (_assets / "silero_vad.onnx").is_file():
+    datas.append((str(_assets), "assets"))
+else:
+    raise SystemExit(
+        f"[laris.spec] {_assets / 'silero_vad.onnx'} is missing - the VAD fetch "
+        "step must run before PyInstaller. Failing here rather than shipping an "
+        "engine whose hands-free toggle does nothing (it is packaged windowed, "
+        "so that would fail in silence)."
+    )
+
 # Native-heavy runtime deps: bundle everything they ship (submodules + data + DLLs).
-# STT no longer appears here: faster_whisper/ctranslate2 were dropped with the
-# CUDA-only backend, and av/onnxruntime/tokenizers/huggingface_hub came in only
-# as their dependencies (audio is read with the stdlib `wave` module).
-for pkg in ("sounddevice",):
+# STT is not here: faster_whisper/ctranslate2 were dropped with the CUDA-only
+# backend, and av/tokenizers/huggingface_hub came in only as their dependencies
+# (audio is read with the stdlib `wave` module). onnxruntime is back, but for
+# the VAD alone - miris does no streaming detection and does not collect it.
+for pkg in ("sounddevice", "onnxruntime"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

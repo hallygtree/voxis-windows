@@ -33,7 +33,7 @@ _TAIL_PAD_CHUNKS = 3
 
 
 def model_path() -> Path:
-    """The bundled model. ~1 MB, MIT-licensed, shipped in the installer rather
+    """The bundled model. 2.2 MB, MIT-licensed, shipped in the installer rather
     than downloaded: a file this small does not justify another wait on first
     use."""
     override = os.environ.get("VOXIS_VAD_MODEL")

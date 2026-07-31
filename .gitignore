@@ -6,3 +6,6 @@ test-local.ps1
 # native output that is rebuilt from a pinned upstream tag, never committed
 packages/*/whispercpp/
 whisper.cpp/
+
+# Silero VAD model fetched by the build from a pinned upstream tag
+packages/laris/assets/
