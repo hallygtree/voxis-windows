@@ -269,6 +269,7 @@ def test_hands_free_unavailable_does_not_kill_the_daemon(monkeypatch, capsys):
     the process. A double-tap of the PTT key must not take plain dictation
     down with it - regression for the daemon dying on a documented gesture."""
     import laris.audio_capture as audio_capture
+    import laris.config as config_mod
     import laris.daemon as daemon_mod
     import laris.hotkey as hotkey_mod
     import laris.platform as platform_mod
@@ -293,6 +294,8 @@ def test_hands_free_unavailable_does_not_kill_the_daemon(monkeypatch, capsys):
     monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
     monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
     monkeypatch.setattr(audio_capture, "VadCapture", no_silero)
+    # the gesture only reaches the loop when the setting permits it
+    monkeypatch.setattr(config_mod, "MODE", "always_on")
 
     rounds = {"n": 0}
 
@@ -312,11 +315,11 @@ def test_hands_free_unavailable_does_not_kill_the_daemon(monkeypatch, capsys):
     assert rounds["n"] == 2
 
 
-def test_always_on_boots_into_hands_free(monkeypatch):
-    """ASSISTANT_MODE=always_on (the tray 'Hands-free' checkbox) must boot the
-    daemon already armed. We route it through run()'s in-loop hands-free flag,
-    NOT run_always_on(), so the torch-free Windows bundle degrades to PTT via the
-    VAD-unavailable guard instead of SystemExit-ing at boot."""
+def test_always_on_permits_the_gesture_without_starting_a_session(monkeypatch):
+    """ASSISTANT_MODE=always_on (the tray 'Hands-free' checkbox) permits the
+    double-tap; it does not start listening. Arming at boot was harmless while
+    hands-free did not work, but now it would mean the machine starts
+    transcribing into whatever is focused the moment the app comes up."""
     import laris.config as config_mod
     import laris.daemon as daemon_mod
     import laris.hotkey as hotkey_mod
@@ -343,8 +346,9 @@ def test_always_on_boots_into_hands_free(monkeypatch):
     seen = {}
 
     def fake_wait(pressed, hands_free=None, on_tick=lambda: None):
-        # The flag must already be set the first time the loop asks for input.
-        seen["armed_at_entry"] = hands_free.is_set()
+        # the gesture is wired up (not None) but nothing is armed yet
+        seen["gesture_wired"] = hands_free is not None
+        seen["armed_at_entry"] = hands_free is not None and hands_free.is_set()
         raise _StopLoop
 
     monkeypatch.setattr(daemon_mod, "_wait_for_ptt", fake_wait)
@@ -352,12 +356,14 @@ def test_always_on_boots_into_hands_free(monkeypatch):
     with pytest.raises(_StopLoop):
         daemon_mod.run(make_voice_session=lambda: MagicMock())
 
-    assert seen["armed_at_entry"] is True
+    assert seen["gesture_wired"] is True
+    assert seen["armed_at_entry"] is False
 
 
-def test_ptt_mode_does_not_arm_hands_free(monkeypatch):
-    """The default ASSISTANT_MODE=ptt must NOT pre-arm hands-free - the loop
-    should start waiting for a real key press, not a VAD session."""
+def test_ptt_mode_ignores_the_gesture_entirely(monkeypatch):
+    """With the default ASSISTANT_MODE=ptt the double-tap must do nothing at
+    all - the loop never even looks at the flag, so a stray gesture cannot
+    open a microphone the user did not ask for."""
     import laris.config as config_mod
     import laris.daemon as daemon_mod
     import laris.hotkey as hotkey_mod
@@ -384,7 +390,7 @@ def test_ptt_mode_does_not_arm_hands_free(monkeypatch):
     seen = {}
 
     def fake_wait(pressed, hands_free=None, on_tick=lambda: None):
-        seen["armed_at_entry"] = hands_free.is_set()
+        seen["gesture_wired"] = hands_free is not None
         raise _StopLoop
 
     monkeypatch.setattr(daemon_mod, "_wait_for_ptt", fake_wait)
@@ -392,7 +398,7 @@ def test_ptt_mode_does_not_arm_hands_free(monkeypatch):
     with pytest.raises(_StopLoop):
         daemon_mod.run(make_voice_session=lambda: MagicMock())
 
-    assert seen["armed_at_entry"] is False
+    assert seen["gesture_wired"] is False
 
 
 def test_daemon_run_accepts_orb_state_parameter(monkeypatch):
@@ -560,3 +566,94 @@ def test_daemon_run_without_orb_state_behaves_as_before(monkeypatch):
     # Should not raise
     with pytest.raises(_StopLoop):
         daemon_mod.run(make_voice_session=lambda: MagicMock())  # orb_state=None
+
+
+def _hands_free_parts(utterances, transcribe=None):
+    """The five collaborators _run_hands_free_session drives."""
+    import numpy as np
+
+    class FakeVad:
+        def stream_utterances(self, should_stop=None, on_chunk=None):
+            for audio in utterances:
+                if should_stop is not None and should_stop():
+                    return
+                yield np.asarray(audio, dtype=np.float32), 16000
+
+    class FakeStt:
+        def transcribe(self, audio, sample_rate):
+            if transcribe is not None:
+                return transcribe(audio)
+            return "texto"
+
+    typed = []
+    overlay = MagicMock()
+    ducker = MagicMock()
+    return FakeVad(), FakeStt(), typed.append, overlay, ducker, typed
+
+
+def test_hands_free_session_types_every_utterance():
+    """Nothing covered this function before, and it is the one that writes into
+    whatever the user has focused."""
+    import queue
+
+    import laris.daemon as daemon_mod
+
+    vad, stt, typer, overlay, ducker, typed = _hands_free_parts([[0.1] * 16000] * 3)
+    active = threading.Event()
+    active.set()
+
+    daemon_mod._run_hands_free_session(
+        vad, stt, typer, overlay, queue.Queue(), active, ducker=ducker
+    )
+
+    assert typed == ["texto"] * 3
+    overlay.show.assert_called_once_with("dictate")
+    overlay.hide.assert_called_once()
+    ducker.duck.assert_called_once()
+    ducker.restore.assert_called_once()
+
+
+def test_one_bad_utterance_does_not_end_the_hands_free_session():
+    """A transcription failure mid-session must cost that utterance, not the
+    session - otherwise one hiccup silently drops the user back to PTT."""
+    import queue
+
+    import laris.daemon as daemon_mod
+
+    calls = {"n": 0}
+
+    def flaky(_audio):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("gpu hiccup")
+        return "ok"
+
+    vad, stt, typer, overlay, ducker, typed = _hands_free_parts(
+        [[0.1] * 16000] * 3, transcribe=flaky
+    )
+    active = threading.Event()
+    active.set()
+
+    daemon_mod._run_hands_free_session(
+        vad, stt, typer, overlay, queue.Queue(), active, ducker=ducker
+    )
+
+    assert typed == ["ok", "ok"], "the failing utterance is skipped, not fatal"
+    overlay.hide.assert_called_once()
+
+
+def test_hands_free_session_stops_when_the_flag_clears():
+    """A single key press clears the flag; the session must notice and end."""
+    import queue
+
+    import laris.daemon as daemon_mod
+
+    vad, stt, typer, overlay, ducker, typed = _hands_free_parts([[0.1] * 16000] * 3)
+    active = threading.Event()   # already clear: stop before the first yield
+
+    daemon_mod._run_hands_free_session(
+        vad, stt, typer, overlay, queue.Queue(), active, ducker=ducker
+    )
+
+    assert typed == []
+    overlay.hide.assert_called_once()

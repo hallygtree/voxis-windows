@@ -226,7 +226,10 @@ fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
     let dictation =
         CheckMenuItem::with_id(app, "dictation", &dictation_label, true, snap.laris_alive, None::<&str>)?;
     let hands_free = CheckMenuItem::with_id(
-        app, "hands_free", "Hands-free", snap.laris_alive, snap.hands_free, None::<&str>,
+        // The checkbox permits the gesture; the double-tap is what starts a
+        // session. Saying so here is the only place a user learns it.
+        app, "hands_free", "Hands-free (duplo-toque na tecla)", snap.laris_alive,
+        snap.hands_free, None::<&str>,
     )?;
 
     let (cur_arch, cur_pal, cur_pos) = snap.theme.clone().unwrap_or_default();

@@ -180,14 +180,12 @@ def run(
     threading.Thread(target=_warm_backend, name="laris-warm", daemon=True).start()
     vad = None
     vad_unavailable = False
-    # ASSISTANT_MODE=always_on (the tray "Hands-free" checkbox) boots straight
-    # into hands-free instead of waiting for the double-tap gesture. We arm the
-    # existing in-loop flag rather than routing to run_always_on(): that path
-    # constructs VadCapture() eagerly, which SystemExits on the torch-free
-    # Windows bundle and would kill the whole daemon - plain dictation included -
-    # at boot. Arming here degrades to PTT via the VAD-unavailable guard below.
-    if config.MODE == "always_on":
-        ptt.hands_free.set()
+    # ASSISTANT_MODE=always_on (the tray "Hands-free" checkbox) permits the
+    # gesture; it does not start a session. Booting straight into hands-free
+    # was safe while the feature did not work, but now it would mean the
+    # machine starts listening and typing into whatever happens to be focused
+    # the moment the app comes up. The double-tap is the intent signal.
+    hands_free_gesture = ptt.hands_free if config.MODE == "always_on" else None
     kiris = "com Kiris (assistente)" if assistant else "pura (VOICE_ASSISTANT=0, muda)"
     print(
         f"[Voice] Laris (transcritora) pronta, {kiris} - "
@@ -199,13 +197,12 @@ def run(
             voice_queue.put(VoiceEvent(phase=PHASE_IDLE, amplitude=0.0))
 
     while True:
-        kind, pressed = _wait_for_ptt(ptt.pressed, hands_free=ptt.hands_free, on_tick=_reset_orb_if_stale)
+        kind, pressed = _wait_for_ptt(ptt.pressed, hands_free=hands_free_gesture, on_tick=_reset_orb_if_stale)
         if kind == "hands_free":
-            # The torch-free Windows bundle ships no silero-vad, so VadCapture()
-            # raises SystemExit there. Unguarded, a stray double-tap of the PTT
-            # key - a documented gesture the hotkey banner advertises - took the
-            # whole daemon down and killed plain dictation with it. Degrade to
-            # "hands-free unavailable" and keep push-to-talk working.
+            # Constructed on first use, and still guarded: a VAD that cannot
+            # load must not take the daemon down with it, because that would
+            # kill plain dictation too. SystemExit is spelled out because the
+            # torch path raises it rather than a plain Exception.
             if vad is None and not vad_unavailable:
                 try:
                     from laris.audio_capture import VadCapture
@@ -217,7 +214,7 @@ def run(
                         "push-to-talk keeps working. Hold the key to dictate."
                     )
             if vad is None:
-                # leave it set and _wait_for_ptt hands it straight back to us
+                # clear it, or _wait_for_ptt hands it straight back and spins
                 ptt.hands_free.clear()
                 continue
             _run_hands_free_session(vad, stt, type_text, overlay, voice_queue, pressed, ducker=ducker)
@@ -253,37 +250,5 @@ def run(
         finally:
             ducker.restore()
             overlay.hide()
-
-        voice_queue.put(VoiceEvent(phase=phase, amplitude=amplitude))
-
-
-def run_always_on(make_voice_session, voice_queue=None) -> None:
-    """Runs on a background daemon thread: VadCapture blocks synchronously
-    on the mic stream, so it can't share the asyncio event loop uvicorn
-    uses. Heavy ML imports are deferred here so importing laris.daemon
-    doesn't require torch/mlx_whisper to be installed."""
-    from laris.audio_capture import VadCapture
-    from laris.platform import get_backend
-
-    if voice_queue is None:
-        import queue
-        voice_queue = queue.Queue()
-
-    backend = get_backend()
-    backend.warm()
-    stt = backend
-    voice_session = make_voice_session()
-
-    for audio, sample_rate in VadCapture().stream_utterances():
-        try:
-            text = stt.transcribe(audio, sample_rate)
-            if not text:
-                continue
-            phase = voice_session.handle_utterance(text)
-            amplitude = compute_amplitude(audio)
-            print(f"[Voice] heard: {text!r} -> phase={phase}")
-        except Exception as exc:  # noqa: BLE001 - one bad utterance must not kill the listener
-            print(f"[Voice] {exc!r} (ignoring this utterance, voice loop keeps running)")
-            continue
 
         voice_queue.put(VoiceEvent(phase=phase, amplitude=amplitude))
