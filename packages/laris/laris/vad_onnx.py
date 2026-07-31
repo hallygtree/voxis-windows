@@ -92,7 +92,7 @@ class OnnxVadCapture:
     def stream_utterances(self, should_stop=None, on_chunk=None):
         import queue
 
-        from laris.audio_capture import _denoise_chunk, _open_stream
+        from laris.audio_capture import _open_stream
 
         chunk_ms = 1000.0 * config.CHUNK_SAMPLES / config.SAMPLE_RATE
         max_chunks = int(
@@ -154,6 +154,4 @@ class OnnxVadCapture:
                     in_speech, voiced, silence_ms, last_voice = False, [], 0.0, -1
                     self._vad.reset()
                     if speech_samples >= min_samples:
-                        if config.NOISE_REDUCTION == "on":
-                            audio = _denoise_chunk(audio, enabled=True)
                         yield audio, config.SAMPLE_RATE

@@ -67,10 +67,10 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     excludes=[
-        # keep the bundle lean and portable: never drag torch/mlx/pyobjc in
-        "torch", "torchaudio", "silero_vad", "df", "deepfilternet",
-        "mlx", "mlx_whisper", "AppKit", "WebKit", "objc", "Foundation",
-        "Quartz", "ApplicationServices",
+        # Nothing installs torch any more - the VAD runs on onnxruntime - but
+        # a transitive dependency pulling it back in would add gigabytes to
+        # the installer without anything failing, so it stays barred.
+        "torch", "torchaudio", "silero_vad", "deepfilternet",
     ],
     noarchive=False,
 )

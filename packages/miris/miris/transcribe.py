@@ -1,4 +1,4 @@
-"""Per-channel STT (mlx-whisper via laris) + timeline merge."""
+"""Per-channel STT (whisper.cpp via laris) + timeline merge."""
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,24 +29,11 @@ def load_wav_mono16k(path: Path) -> np.ndarray:
     if n_ch > 1:
         audio = audio[: len(audio) - len(audio) % n_ch]  # tolerate truncated WAVs
         audio = downmix_to_mono(audio.reshape(-1, n_ch))
-    # B3: this used to resample via torchaudio, which is not in the torch-free
-    # Windows bundle. Windows capture already writes 16 kHz mono, so that path
-    # never runs there - but the macOS helper writes at the device's native
-    # rate (audiotap.swift takes mSampleRate from the tap format, typically
-    # 48 kHz stereo), so dropping resampling outright would have made every
-    # macOS meeting silently lose its system channel: build_transcript()
-    # swallows per-channel errors and carries on with the other one.
+    # Capture already writes 16 kHz mono, so this is normally a no-op - but a
+    # device that reports another rate would otherwise be transcribed at the
+    # wrong speed, and build_transcript swallows per-channel errors, so it
+    # would surface as a meeting quietly missing one side.
     return resample_to_16k(audio, sr)
-
-
-def speech_spans(audio: np.ndarray, sr: int = TARGET_SR) -> list[tuple[int, int]]:
-    """Silero VAD over the whole file -> utterance-sized (start, end) sample spans."""
-    import torch
-    from silero_vad import get_speech_timestamps, load_silero_vad
-
-    model = load_silero_vad()
-    stamps = get_speech_timestamps(torch.from_numpy(audio), model, sampling_rate=sr)
-    return [(t["start"], t["end"]) for t in stamps]
 
 
 def collapse_repetitions(text: str, max_run: int = 3) -> str:
@@ -65,25 +52,20 @@ def collapse_repetitions(text: str, max_run: int = 3) -> str:
     return " ".join(out)
 
 
-def transcribe_channel(path: Path, speaker: str, transcriber,
-                       spans_fn=speech_spans) -> list[Segment]:
+def transcribe_channel(path: Path, speaker: str, transcriber) -> list[Segment]:
+    """Segments carry start/end on the original timeline, so no offset
+    arithmetic is needed here.
+
+    There used to be a fallback that ran a torch VAD and transcribed each span
+    separately, for transcribers without transcribe_with_vad. That was the mlx
+    path; the only transcriber left has the method, and silently producing a
+    worse transcript would be harder to notice than failing."""
     audio = load_wav_mono16k(path)
     segments = []
-
-    # If transcriber supports VAD-aware transcription (whisper.cpp), use it
-    if hasattr(transcriber, "transcribe_with_vad"):
-        # Returns segments carrying start/end timestamps on the original
-        # timeline, so no offset arithmetic is needed here
-        for segment in transcriber.transcribe_with_vad(audio):
-            text = collapse_repetitions(segment.text)
-            if text:
-                segments.append(Segment(segment.start, segment.end, speaker, text))
-    else:
-        # Fallback: use speech_spans for VAD (legacy path for mlx)
-        for start, end in spans_fn(audio):
-            text = collapse_repetitions(transcriber.transcribe(audio[start:end]))
-            if text:
-                segments.append(Segment(start / TARGET_SR, end / TARGET_SR, speaker, text))
+    for segment in transcriber.transcribe_with_vad(audio):
+        text = collapse_repetitions(segment.text)
+        if text:
+            segments.append(Segment(segment.start, segment.end, speaker, text))
     return segments
 
 

@@ -17,20 +17,20 @@ class _FakeListener:
 
 
 def _install_fake_pynput(monkeypatch):
-    key = SimpleNamespace(cmd_r=object(), shift_r=object(), f5=object())
+    key = SimpleNamespace(shift_r=object(), shift_l=object(), f5=object())
     keyboard = SimpleNamespace(Key=key, Listener=_FakeListener)
     monkeypatch.setitem(sys.modules, "pynput", SimpleNamespace(keyboard=keyboard))
 
 
 @pytest.mark.parametrize("key_name", ["alt_r", "ctrl"])
-def test_push_to_talk_rejects_broken_macos_keys(key_name):
+def test_push_to_talk_rejects_unsupported_keys(key_name):
     from laris.hotkey import PushToTalk
 
     with pytest.raises(ValueError):
         PushToTalk(key_name)
 
 
-@pytest.mark.parametrize("key_name", ["cmd_r", "shift_r", "f5"])
+@pytest.mark.parametrize("key_name", ["shift_r", "shift_l", "f5"])
 def test_push_to_talk_constructs_for_allowed_keys(monkeypatch, key_name):
     _install_fake_pynput(monkeypatch)
     from laris.hotkey import PushToTalk
@@ -54,7 +54,7 @@ def _make_ptt(monkeypatch):
     from laris.hotkey import PushToTalk
 
     clock = _Clock()
-    ptt = PushToTalk("cmd_r", now=clock)
+    ptt = PushToTalk("shift_r", now=clock)
     return ptt, ptt._target, clock
 
 

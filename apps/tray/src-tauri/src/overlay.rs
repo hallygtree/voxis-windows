@@ -1,7 +1,6 @@
-//! Transparent orb overlay window on Windows. The orb HTML/JS is served by
-//! the laris FastAPI server (/overlay); here we host it in a click-through,
-//! always-on-top, transparent Tauri window. On macOS laris drives its own
-//! pyobjc window, so these functions are no-ops there.
+//! Transparent orb overlay window. The orb HTML/JS is served by the laris
+//! FastAPI server (/overlay); here we host it in a click-through,
+//! always-on-top, transparent Tauri window.
 
 use crate::laris::LarisPeer;
 
@@ -139,14 +138,6 @@ pub fn close(app: &tauri::AppHandle) {
         *last = None;
     }
 }
-
-#[cfg(not(windows))]
-pub fn sync(_app: &tauri::AppHandle, _url: &str, _rect: Option<OrbRect>, _visible: bool) -> tauri::Result<()> {
-    Ok(()) // macOS: laris hosts its own pyobjc overlay
-}
-
-#[cfg(not(windows))]
-pub fn close(_app: &tauri::AppHandle) {}
 
 #[cfg(test)]
 mod tests {

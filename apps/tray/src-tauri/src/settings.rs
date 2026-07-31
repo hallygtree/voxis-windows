@@ -62,10 +62,7 @@ impl Default for TrayConfig {
     }
 }
 
-#[cfg(windows)]
 const MIRIS_ENGINE_NAME: &str = "miris-engine.exe";
-#[cfg(not(windows))]
-const MIRIS_ENGINE_NAME: &str = "miris-engine";
 
 /// Which miris binary to actually run. The tray.json default
 /// (`~/.local/bin/miris`) is a pip console-script that only exists where

@@ -92,7 +92,6 @@ fn take_snapshot(app: &tauri::AppHandle, state: &AppState) -> Snapshot {
     // work_area() rather than size(): it excludes the taskbar, so a "bottom-*"
     // position lands above it instead of behind it. It does exist in tauri 2.11.5
     // (an earlier comment here claimed otherwise without checking).
-    #[cfg(windows)]
     let (screen_w, screen_h, monitor_origin) = {
         app.primary_monitor()
             .ok()
@@ -105,12 +104,6 @@ fn take_snapshot(app: &tauri::AppHandle, state: &AppState) -> Snapshot {
                 (size.width, size.height, (pos.x, pos.y))
             })
             .unwrap_or((1920.0, 1080.0, (0.0, 0.0)))
-    };
-
-    #[cfg(not(windows))]
-    let (screen_w, screen_h, monitor_origin) = {
-        let _ = app; // macOS positions its own pyobjc panel; nothing to measure here
-        (1920.0, 1080.0, (0.0, 0.0))
     };
 
     // ponytail: theme fetched every tick while laris is up - localhost HTTP,
@@ -274,13 +267,6 @@ fn set_tray_icon(tray: &TrayIcon, recording: bool) {
     };
     if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
         let _ = tray.set_icon(Some(img));
-        // icon_as_template is macOS-only: it makes the icon adapt to theme
-        // (light/dark). On Windows it's a no-op; the icon is already colored.
-        #[cfg(target_os = "macos")]
-        {
-            let template = !recording;
-            let _ = tray.set_icon_as_template(template);
-        }
     }
 }
 
@@ -413,9 +399,6 @@ pub fn run() {
             commands::save_theme,
         ])
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
             let mut config = settings::load_tray_config();
             // packaged builds ship miris frozen as a resource; tray.json's
             // default path only exists on a machine with the pip install
@@ -424,7 +407,6 @@ pub fn run() {
                 settings::effective_miris_bin(&config.miris_bin, resource_dir.as_deref());
             config.miris_bin = miris_bin;
             let daemon = {
-                #[cfg(windows)]
                 {
                     let engine = resource_dir
                         .as_ref()
@@ -439,10 +421,6 @@ pub fn run() {
                         ),
                         None => laris::LarisDaemon::new(PathBuf::from(&config.laris_dir)),
                     }
-                }
-                #[cfg(not(windows))]
-                {
-                    laris::LarisDaemon::new(PathBuf::from(&config.laris_dir))
                 }
             };
             app.manage(AppState {
@@ -463,12 +441,6 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()));
-
-            // Template icons are an AppKit concept - the system retints them for
-            // the menu bar. No-op on Windows, so keep it macOS-only. Shadowing
-            // instead of `let mut` avoids an unused-mut warning elsewhere.
-            #[cfg(target_os = "macos")]
-            let builder = builder.icon_as_template(true);
 
             let tray = builder.build(app)?;
             set_tray_icon(&tray, snap.recording.is_some());

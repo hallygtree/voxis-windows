@@ -1,13 +1,14 @@
-"""System audio capture: platform-specific backends (macOS audiotap, Windows WASAPI loopback)."""
-import os
-import signal
-import subprocess
+"""System audio capture: the Tap interface and the factory that picks one.
+
+Only the WASAPI loopback backend remains - the macOS audiotap subprocess went
+with the rest of the macOS support. The interface stays because
+loopback_windows implements it and the recorder is written against it, not
+against a concrete class.
+"""
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
-
-DEFAULT_BIN = Path(__file__).resolve().parent.parent / "helper" / "audiotap"
 
 
 class Tap(ABC):
@@ -16,57 +17,23 @@ class Tap(ABC):
     @abstractmethod
     def start(self) -> None:
         """Start capturing system audio."""
-        pass
 
     @abstractmethod
     def alive(self) -> bool:
         """Check if capture is running."""
-        pass
 
     @abstractmethod
     def stop(self, grace_s: float = 5.0) -> None:
         """Stop capturing and finalize output WAV."""
-        pass
-
-
-class SystemTap(Tap):
-    """macOS system audio capture via audiotap subprocess."""
-
-    def __init__(self, out_wav: Path, binary: Path | None = None):
-        self.out_wav = out_wav
-        # explicit binary wins; MIRIS_AUDIOTAP only overrides the default
-        self.binary = Path(binary or os.environ.get("MIRIS_AUDIOTAP") or DEFAULT_BIN)
-        self.proc: subprocess.Popen | None = None
-
-    def start(self) -> None:
-        if not self.binary.exists():
-            raise FileNotFoundError(
-                f"audiotap binary not found: {self.binary} (run: make -C helper)"
-            )
-        self.proc = subprocess.Popen([str(self.binary), str(self.out_wav)])
-
-    def alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
-
-    def stop(self, grace_s: float = 5.0) -> None:
-        if self.proc is None or self.proc.poll() is not None:
-            return
-        self.proc.send_signal(signal.SIGTERM)
-        try:
-            self.proc.wait(timeout=grace_s)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait()
 
 
 def default_tap_factory() -> Callable[[Path], Tap]:
-    """Return platform-specific Tap factory.
+    """The WASAPI loopback tap. Fails loudly elsewhere rather than returning
+    something that records silence."""
+    if sys.platform != "win32":
+        raise SystemExit(
+            f"[miris] this is a Windows-only port; {sys.platform} is not supported"
+        )
+    from miris.loopback_windows import WindowsLoopbackTap
 
-    On Windows: returns WindowsLoopbackTap (WASAPI loopback in-process)
-    On macOS/Linux: returns SystemTap (audiotap subprocess)
-    """
-    if sys.platform == "win32":
-        from miris.loopback_windows import WindowsLoopbackTap
-        return WindowsLoopbackTap
-    else:
-        return SystemTap
+    return WindowsLoopbackTap

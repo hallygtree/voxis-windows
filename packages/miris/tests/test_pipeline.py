@@ -34,12 +34,20 @@ def _session_with_mic(tmp_path):
     return session
 
 
+class _Segment:
+    def __init__(self, start, end, text):
+        self.start, self.end, self.text = start, end, text
+
+
 class FakeTranscriber:
+    """transcribe_with_vad is the whole contract now - transcribe_channel has
+    no fallback for a transcriber without it."""
+
     def warm(self):
         pass
 
-    def transcribe(self, audio):
-        return "fala"
+    def transcribe_with_vad(self, audio, sample_rate=16000):
+        return [_Segment(0.0, 1.0, "fala")]
 
 
 def test_process_session_happy_path(tmp_path, monkeypatch):
@@ -47,8 +55,6 @@ def test_process_session_happy_path(tmp_path, monkeypatch):
                        "resumo": "R", "action_items": []})
     cfg = _cfg(tmp_path, _emit(good))
     session = _session_with_mic(tmp_path)
-    monkeypatch.setattr("miris.transcribe.speech_spans",
-                        lambda a, sr=16000: [(0, 16000)])
     note = pipeline.process_session(cfg, session, transcriber_factory=FakeTranscriber)
     assert note.parent == tmp_path / "vault/work"
     assert "fala" in note.read_text(encoding="utf-8")
@@ -61,8 +67,6 @@ def test_process_session_records_note_path(tmp_path, monkeypatch):
                        "resumo": "R", "action_items": []})
     cfg = _cfg(tmp_path, _emit(good))
     session = _session_with_mic(tmp_path)
-    monkeypatch.setattr("miris.transcribe.speech_spans",
-                        lambda a, sr=16000: [(0, 16000)])
     note = pipeline.process_session(cfg, session, transcriber_factory=FakeTranscriber)
     assert (session / "note.path").read_text(encoding="utf-8") == str(note)
 
@@ -70,8 +74,6 @@ def test_process_session_records_note_path(tmp_path, monkeypatch):
 def test_process_session_llm_failure_goes_to_inbox(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path, "import sys; sys.exit(1)")
     session = _session_with_mic(tmp_path)
-    monkeypatch.setattr("miris.transcribe.speech_spans",
-                        lambda a, sr=16000: [(0, 16000)])
     note = pipeline.process_session(cfg, session, transcriber_factory=FakeTranscriber)
     assert note.parent == tmp_path / "vault/inbox"
     assert "resumo indisponível" in note.read_text(encoding="utf-8")

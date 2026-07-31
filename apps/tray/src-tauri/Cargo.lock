@@ -4111,7 +4111,6 @@ version = "0.4.0"
 dependencies = [
  "chrono",
  "dirs",
- "libc",
  "serde",
  "serde_json",
  "tauri",

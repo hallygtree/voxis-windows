@@ -1,4 +1,4 @@
-"""Recording process: mic -> mic.wav, audiotap helper -> system.wav.
+"""Recording process: mic -> mic.wav, WASAPI loopback -> system.wav.
 Runs until SIGTERM/SIGINT; finalizes both WAVs on the way out.
 Spawned detached by `miris start` as: python -m miris.recorder <session_dir>."""
 import os

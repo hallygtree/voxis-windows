@@ -5,12 +5,12 @@ import threading
 import time
 from typing import Any, Callable
 
+# No cmd_*: there is no Command key on Windows, and pynput maps it to the
+# Windows key, which opens the Start menu on every press.
 _ALLOWED = {
-    "cmd_r", "cmd_l",
     "shift_r", "shift_l",
     "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
 }
-_BROKEN_ON_MACOS = {"ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r"}
 
 # Wispr Flow's gesture: double-TAP the PTT key toggles hands-free.
 # Only short taps count - dictating two sentences back-to-back is two
@@ -53,23 +53,8 @@ class PushToTalk:
 
     @staticmethod
     def _validate_key(key_name: str) -> None:
-        if key_name in _BROKEN_ON_MACOS:
-            raise ValueError(
-                f"[Hotkey] '{key_name}' does not work as a global hotkey on macOS "
-                f"(pynput #297). Use one of: {sorted(_ALLOWED)}"
-            )
         if key_name not in _ALLOWED:
             raise ValueError(f"[Hotkey] unsupported key '{key_name}'. Use one of: {sorted(_ALLOWED)}")
-
-    @staticmethod
-    def check_trusted() -> bool:
-        """True when macOS Accessibility permissions allow keyboard monitoring."""
-        try:
-            from ApplicationServices import AXIsProcessTrusted
-
-            return bool(AXIsProcessTrusted())
-        except ImportError:
-            return True
 
     def _on_press(self, key) -> None:
         if key != self._target:
@@ -94,11 +79,6 @@ class PushToTalk:
             self._last_tap_at = self._now()
 
     def start(self) -> None:
-        if not self.check_trusted():
-            print(
-                "[Hotkey] WARNING: process lacks Accessibility permission; "
-                "push-to-talk may fail silently."
-            )
         self._listener = self._keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,

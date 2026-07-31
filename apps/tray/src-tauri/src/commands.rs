@@ -6,18 +6,12 @@ use tauri::{AppHandle, Manager};
 
 use crate::{laris, settings, AppState};
 
-const KNOWN_LARIS_KEYS: [&str; 5] = [
-    "ASSISTANT_MODE",
-    "DICTATE_KEY",
-    "STT_MODEL",
-    "STT_MODEL_GGML",
-    "NOISE_REDUCTION",
-];
+const KNOWN_LARIS_KEYS: [&str; 3] = ["ASSISTANT_MODE", "DICTATE_KEY", "STT_MODEL_GGML"];
 
-// mirror of laris/hotkey.py _ALLOWED
-const DICTATE_KEYS: [&str; 15] = [
-    "cmd_r", "cmd_l", "shift_r", "shift_l", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-    "f13", "f14", "f15",
+// mirror of laris/hotkey.py _ALLOWED - no cmd_* because Windows has no Command
+// key and pynput maps it to the Windows key, which opens the Start menu
+const DICTATE_KEYS: [&str; 13] = [
+    "shift_r", "shift_l", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
 ];
 
 /// Value-level validation: a select with no matching option submits "" - the
@@ -26,9 +20,7 @@ fn valid_value(key: &str, value: &serde_json::Value) -> bool {
     let Some(s) = value.as_str() else { return false };
     match key {
         "ASSISTANT_MODE" => matches!(s, "ptt" | "always_on"),
-        "NOISE_REDUCTION" => matches!(s, "on" | "off"),
         "DICTATE_KEY" => DICTATE_KEYS.contains(&s),
-        "STT_MODEL" => !s.trim().is_empty(),
         "STT_MODEL_GGML" => !s.trim().is_empty(),
         _ => false,
     }
@@ -41,12 +33,6 @@ pub struct SettingsPayload {
     theme: Option<serde_json::Value>,
     laris_alive: bool,
     version: String,
-    /// The engine's platform, straight from the build that spawns it. The UI
-    /// picks per-platform defaults (DICTATE_KEY, STT model key) from this;
-    /// sniffing navigator.userAgent instead would put the whole thing at the
-    /// mercy of a webview UA string, and getting it wrong is silent - the
-    /// user saves a key that simply never fires.
-    platform: String,
 }
 
 fn peer() -> Option<laris::LarisPeer> {
@@ -70,7 +56,6 @@ pub async fn get_settings(app: AppHandle) -> SettingsPayload {
         theme,
         laris_alive,
         version: app.package_info().version.to_string(),
-        platform: std::env::consts::OS.to_string(), // "windows" | "macos" | "linux"
     }
 }
 
@@ -135,20 +120,15 @@ pub fn show_settings_window(app: &AppHandle) {
         let _ = w.set_focus();
         return;
     }
-    // Shadowing rather than `let mut` + cfg block: on non-Windows the binding is
-    // never reassigned, which warns.
     let builder = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::default())
         .title("VOXIS - Configurações")
         .inner_size(560.0, 680.0)
         .center()
         .min_inner_size(480.0, 520.0)
-        .theme(None);
-
-    // Runs before any script on the page, so the stylesheet can key off the
-    // platform without the flash that an async load() would cause.
-    #[cfg(windows)]
-    let builder =
-        builder.initialization_script("document.documentElement.classList.add('plat-windows');");
+        .theme(None)
+        // Runs before any script on the page, so the stylesheet applies
+        // without the flash an async load() would cause.
+        .initialization_script("document.documentElement.classList.add('plat-windows');");
 
     let _ = builder.build();
 }

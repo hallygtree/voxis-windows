@@ -1,3 +1,20 @@
+# Miris meeting recorder - Windows only.
+numpy>=1.24.0
+sounddevice>=0.4.6
+
+# System audio capture (WASAPI loopback). Pure-Python via CFFI, no build step.
+# Required, not optional: miris.loopback_windows imports it to capture system
+# audio, and swallowing a failure here produced an exe that started fine and
+# recorded silence into system.wav.
+soundcard>=0.4.6
+
+# Transcription via the sibling laris package (whisper.cpp backend, no torch).
+# MUST be the local path: PyPI publishes an unrelated project called "laris"
+# (0.9.3, single-cell bioinformatics), so a bare `laris` here installs the
+# wrong code and drags in anndata/scanpy. The frozen exe would then fail on
+# `from laris.stt_whispercpp import ...` - windowed, i.e. silently.
 -e ../laris
 -e .
+
+# Testing
 pytest>=8.0.0

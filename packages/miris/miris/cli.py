@@ -193,20 +193,13 @@ def cmd_doctor(cfg: config.Config) -> None:
     """End-to-end smoke: binary, vault, llm, 3s system-audio capture."""
     import tempfile
 
-    from miris.systemtap import SystemTap, default_tap_factory
+    from miris.systemtap import default_tap_factory
     ok = True
 
-    # Platform-specific system audio check
-    if sys.platform != "win32":
-        # macOS/Linux: check audiotap binary
-        tap_bin = SystemTap(Path("/dev/null")).binary
-        print(f"[{'ok' if tap_bin.exists() else 'FAIL'}] audiotap binary: {tap_bin}")
-        ok &= tap_bin.exists()
-        tap_check_required = tap_bin.exists()
-    else:
-        # Windows: check WASAPI loopback availability (no binary to check)
-        print("[ok] system audio: WASAPI loopback (Windows)")
-        tap_check_required = True
+    # WASAPI loopback is in-process: nothing to locate on disk, unlike the
+    # helper binary the macOS tap needed.
+    print("[ok] system audio: WASAPI loopback")
+    tap_check_required = True
 
     print(f"[{'ok' if cfg.vault_root.is_dir() else 'FAIL'}] vault_root: {cfg.vault_root}")
     ok &= cfg.vault_root.is_dir()

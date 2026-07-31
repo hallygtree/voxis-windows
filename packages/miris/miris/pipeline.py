@@ -1,7 +1,6 @@
 """Post-meeting pipeline: WAVs -> transcript -> notes -> vault note."""
 import json
 import os
-import sys
 from pathlib import Path
 
 from miris import notes as notes_mod
@@ -16,17 +15,13 @@ def _default_transcriber_factory():
     # meetings are bilingual (pt-BR + English): default Whisper to auto-detect
     # per utterance unless the user pinned STT_LANGUAGE themselves
     os.environ.setdefault("STT_LANGUAGE", "")
-    if sys.platform == "win32":
-        # Windows: use whisper.cpp (torch-free). allow_parakeet=False on
-        # purpose: transcribe_channel needs .start/.end per segment, which only
-        # the Whisper path produces, and meetings are processed offline where a
-        # slower CPU run is tolerable. Dictation makes the opposite trade.
-        from laris.stt_whispercpp import WhisperCppTranscriber
-        return WhisperCppTranscriber(allow_parakeet=False)
-    else:
-        # macOS: use mlx-whisper
-        from laris.transcriber import Transcriber
-        return Transcriber()
+    # allow_parakeet=False on purpose: transcribe_channel needs .start/.end per
+    # segment, which only the Whisper path produces, and meetings are processed
+    # offline where a slower CPU run is tolerable. Dictation makes the opposite
+    # trade.
+    from laris.stt_whispercpp import WhisperCppTranscriber
+
+    return WhisperCppTranscriber(allow_parakeet=False)
 
 
 def build_transcript(session_dir: Path, transcriber_factory=None) -> str:
@@ -35,16 +30,16 @@ def build_transcript(session_dir: Path, transcriber_factory=None) -> str:
     transcriber = factory()
     if hasattr(transcriber, "warm"):
         transcriber.warm()
-    # NOTE: keep this sequential. mlx-whisper is not safe to call concurrently
-    # from multiple threads sharing one model - parallelizing the two channels
-    # to halve latency would need one Transcriber (Metal context) per thread.
+    # NOTE: keep this sequential. Both channels share one whisper-server, so
+    # transcribing them at once would only queue inside it - and measured on
+    # the GPU, parallel contexts were slower than one stream.
     channels = []
     for wav_name, speaker in CHANNELS:
         path = session_dir / wav_name
         if path.exists() and path.stat().st_size > WAV_HEADER_BYTES:
             try:
-                channels.append(transcribe.transcribe_channel(
-                    path, speaker, transcriber, transcribe.speech_spans))
+                channels.append(
+                    transcribe.transcribe_channel(path, speaker, transcriber))
             except Exception as exc:  # helper killed mid-meeting leaves a broken WAV
                 print(f"[transcribe] {wav_name} unreadable ({exc}) - continuing without it")
     return transcribe.merge(*channels)

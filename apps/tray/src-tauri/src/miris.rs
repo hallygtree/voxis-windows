@@ -266,13 +266,8 @@ mod tests {
         // would fail and this would test nothing but the error path. `where`
         // lives in System32 (always on PATH) and `where where` prints its own
         // location with exit 0.
-        #[cfg(windows)]
-        {
-            let out = run_cli("where", "where").unwrap();
-            assert!(out.to_lowercase().contains("where.exe"), "unexpected: {out}");
-        }
-        #[cfg(not(windows))]
-        assert_eq!(run_cli("echo", "start").unwrap().trim(), "start");
+        let out = run_cli("where", "where").unwrap();
+        assert!(out.to_lowercase().contains("where.exe"), "unexpected: {out}");
         assert!(run_cli("/nonexistent-bin-xyz", "start").is_err());
     }
 }

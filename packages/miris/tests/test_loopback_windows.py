@@ -151,3 +151,28 @@ def test_real_default_speaker_exposes_a_loopback():
         frames = rec.record(4800)
     assert frames.shape[0] > 0
     assert frames.dtype == np.float32
+
+
+def test_default_tap_factory_returns_the_loopback_tap(monkeypatch):
+    import sys
+
+    from miris import systemtap
+    from miris.loopback_windows import WindowsLoopbackTap
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert systemtap.default_tap_factory() is WindowsLoopbackTap
+
+
+def test_default_tap_factory_refuses_other_platforms(monkeypatch):
+    """Returning something that records silence would be worse than stopping:
+    the recorder swallows per-channel errors and would produce a meeting
+    missing one side with no obvious cause."""
+    import sys
+
+    import pytest
+
+    from miris import systemtap
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(SystemExit):
+        systemtap.default_tap_factory()

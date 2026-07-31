@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-KNOWN_KEYS = ("ASSISTANT_MODE", "DICTATE_KEY", "STT_MODEL", "STT_MODEL_GGML", "NOISE_REDUCTION")
+KNOWN_KEYS = ("ASSISTANT_MODE", "DICTATE_KEY", "STT_MODEL_GGML")
 
 
 def settings_path() -> Path:

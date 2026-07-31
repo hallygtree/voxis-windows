@@ -11,11 +11,7 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [macos-latest, ubuntu-22.04, windows-latest]
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
     steps:
       # actions pinned by commit SHA (a moved tag can ship malicious code) -
       # comments track the human-readable version
@@ -35,13 +31,6 @@ jobs:
         with:
           workspaces: apps/tray/src-tauri
 
-      - name: Linux system deps (webkit + tray)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-
       - name: Install frontend deps
         working-directory: apps/tray
         run: npm install
@@ -51,7 +40,6 @@ jobs:
         run: cargo test
 
       - name: Set up Python (Windows engine)
-        if: matrix.platform == 'windows-latest'
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: "3.11"
@@ -67,14 +55,12 @@ jobs:
       # branch: Actions scopes caches by ref, so a cache written by one tag run
       # is invisible to the next.
       - name: whisper.cpp (Vulkan)
-        if: matrix.platform == 'windows-latest'
         uses: ./.github/actions/whispercpp-build
 
       # Separate from the build so it still runs on a cache hit, and so a cache
       # that restored something unusable fails here rather than shipping an
       # engine that cannot transcribe.
       - name: Stage whisper.cpp for both engines
-        if: matrix.platform == 'windows-latest'
         shell: pwsh
         working-directory: whisper.cpp
         run: |
@@ -95,7 +81,6 @@ jobs:
       # not justify another wait. laris.spec hard-fails without it instead of
       # producing an engine whose hands-free toggle silently does nothing.
       - name: Fetch the Silero VAD model
-        if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path packages/laris/assets | Out-Null
@@ -106,11 +91,10 @@ jobs:
           if ($size -lt 500000) { throw "silero_vad.onnx looks truncated ($size bytes)" }
 
       - name: Build frozen laris engine (Windows)
-        if: matrix.platform == 'windows-latest'
         working-directory: packages/laris
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-windows.txt pyinstaller
+          pip install -r requirements.txt pyinstaller
           pip install -e .
           pyinstaller packaging/laris.spec --noconfirm
           # stage the onedir output where tauri.windows.conf.json expects it
@@ -119,10 +103,9 @@ jobs:
         shell: pwsh
 
       - name: Build frozen miris engine (Windows)
-        if: matrix.platform == 'windows-latest'
         working-directory: packages/miris
         run: |
-          pip install -r requirements-windows.txt pyinstaller
+          pip install -r requirements.txt pyinstaller
           pip install -e .
           pyinstaller packaging/miris.spec --noconfirm
           # stage the onedir output where tauri.windows.conf.json expects it
@@ -137,7 +120,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/tray
-          args: ${{ matrix.platform == 'windows-latest' && '--config src-tauri/tauri.windows.conf.json' || '' }}
+          args: --config src-tauri/tauri.windows.conf.json
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('VOXIS {0}', github.ref_name) || '' }}
           releaseDraft: true
@@ -146,12 +129,8 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: voxis-tray-${{ matrix.platform }}
+          name: voxis-tray-windows
           path: |
-            apps/tray/src-tauri/target/release/bundle/dmg/*.dmg
-            apps/tray/src-tauri/target/release/bundle/macos/*.app/**
             apps/tray/src-tauri/target/release/bundle/msi/*.msi
             apps/tray/src-tauri/target/release/bundle/nsis/*.exe
-            apps/tray/src-tauri/target/release/bundle/deb/*.deb
-            apps/tray/src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: warn

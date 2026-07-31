@@ -55,8 +55,8 @@ def test_file_beats_env_beats_default(monkeypatch, tmp_path, fresh_config):
     path.write_text(json.dumps({"DICTATE_KEY": "f13"}), encoding="utf-8")
     monkeypatch.setenv("LARIS_SETTINGS_PATH", str(path))
     monkeypatch.setenv("DICTATE_KEY", "f5")
-    monkeypatch.setenv("NOISE_REDUCTION", "off")
+    monkeypatch.setenv("STT_MODEL_GGML", "outro.bin")
     cfg = fresh_config()
-    assert cfg.DICTATE_KEY == "f13"        # file wins over env
-    assert cfg.NOISE_REDUCTION == "off"    # env wins over default
+    assert cfg.DICTATE_KEY == "f13"            # file wins over env
+    assert cfg.STT_MODEL_GGML == "outro.bin"   # env wins over default
     assert cfg.MODE == "ptt"               # default when neither set

@@ -86,22 +86,6 @@ def test_load_wav_tolerates_truncated_stereo(tmp_path):
     assert len(loaded) > 0
 
 
-def test_transcribe_channel_uses_spans_and_transcriber(tmp_path):
-    audio = np.zeros(32000, dtype=np.float32)  # 2s @16k
-    _write_wav(tmp_path / "c.wav", audio, 16000)
-
-    class FakeTranscriber:
-        def transcribe(self, chunk):
-            return f"len={len(chunk)}"
-
-    spans = lambda a, sr=16000: [(0, 16000), (16000, 32000)]
-    segs = transcribe.transcribe_channel(tmp_path / "c.wav", "Eu", FakeTranscriber(), spans_fn=spans)
-    assert segs == [
-        Segment(0.0, 1.0, "Eu", "len=16000"),
-        Segment(1.0, 2.0, "Eu", "len=16000"),
-    ]
-
-
 class _FWSegment:
     """Shape of a whisper.cpp segment: start/end in seconds, leading-space text."""
 
@@ -114,28 +98,21 @@ class VadTranscriber:
 
     def __init__(self, segments):
         self._segments = segments
-        self.saw_spans_fn = False
 
     def transcribe_with_vad(self, audio, sample_rate=16000):
         return self._segments
 
 
-def test_transcribe_channel_prefers_builtin_vad_and_keeps_its_timestamps(tmp_path):
-    """B3: on Windows the segmenting is whisper.cpp's own, not silero_vad+torch
-    (which is excluded from the bundle, so taking that branch is a hard
-    failure). whisper.cpp reports segment.start/.end already on the original
-    audio's timeline - they must be carried through verbatim, not rescaled as
-    if they were sample indices."""
+def test_transcribe_channel_keeps_the_segment_timestamps_verbatim(tmp_path):
+    """whisper.cpp reports segment.start/.end already on the original audio's
+    timeline - they must be carried through as-is, not rescaled as if they were
+    sample indices."""
     _write_wav(tmp_path / "d.wav", np.zeros(32000, dtype=np.float32), 16000)
-
-    def exploding_spans(audio, sr=16000):
-        raise AssertionError("must not fall back to the torch/silero VAD")
 
     segs = transcribe.transcribe_channel(
         tmp_path / "d.wav", "Eles",
         VadTranscriber([_FWSegment(0.0, 1.4, " Bom dia"),
-                        _FWSegment(2.5, 4.0, " tudo certo")]),
-        spans_fn=exploding_spans)
+                        _FWSegment(2.5, 4.0, " tudo certo")]))
 
     assert segs == [
         Segment(0.0, 1.4, "Eles", "Bom dia"),
