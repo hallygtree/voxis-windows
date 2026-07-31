@@ -4,6 +4,8 @@ no-op; per-app output ducking is out of scope, so the ducker is a no-op too.
 Heavy imports are lazy (constructed only when this backend is)."""
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 
@@ -34,16 +36,39 @@ class _NoOpDucker:
 
 class WindowsBackend:
     def __init__(self) -> None:
-        from laris.stt_whispercpp import WhisperCppTranscriber
-        # Dictation only needs text, so the fast Parakeet fallback is allowed
-        # when there is no GPU. Miris opts out of it - see miris/pipeline.py.
-        self._stt = WhisperCppTranscriber(allow_parakeet=True)
+        self._stt = None
+        self._stt_lock = threading.Lock()
+
+    def _transcriber(self):
+        """Built on first use, not in __init__.
+
+        Constructing it probes the GPU, may download a model and starts a
+        server - seconds of work. The daemon needs the overlay, the ducker and
+        the hotkey long before any of that, and building eagerly here left the
+        PTT key dead for the whole boot. warm() is what normally triggers this,
+        from a background thread; a keypress that beats it just waits on the
+        lock, so the audio is still recorded rather than lost."""
+        with self._stt_lock:
+            if self._stt is None:
+                from laris.stt_whispercpp import WhisperCppTranscriber
+                # Dictation only needs text, so the fast Parakeet fallback is
+                # allowed when there is no GPU. Miris opts out of it - see
+                # miris/pipeline.py.
+                self._stt = WhisperCppTranscriber(allow_parakeet=True)
+            return self._stt
+
+    def stt_usable(self) -> bool:
+        """False when every backend in the chain failed. daemon.run consults
+        this before telling the tray dictation is ready - reporting ready while
+        transcription returns "" forever is worse than reporting nothing."""
+        stt = self._transcriber()
+        return getattr(stt, "backend", "unavailable") != "unavailable"
 
     def warm(self) -> None:
-        self._stt.warm()
+        self._transcriber().warm()
 
     def transcribe(self, audio: np.ndarray, sample_rate: int) -> str:
-        return self._stt.transcribe(audio, sample_rate)
+        return self._transcriber().transcribe(audio, sample_rate)
 
     def type_text(self, text: str) -> None:
         from laris.dictation_windows import type_text

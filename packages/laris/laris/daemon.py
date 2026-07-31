@@ -138,9 +138,6 @@ def run(
         voice_queue = queue.Queue()
 
     backend = get_backend()
-    backend.warm()
-    if orb_state is not None:
-        orb_state.set_ready(True)
     stt = backend
     type_text = backend.type_text
     voice_session = make_voice_session()
@@ -149,6 +146,25 @@ def run(
     ducker = backend.make_ducker()
     ptt = PushToTalk(config.DICTATE_KEY)
     ptt.start()
+
+    def _warm_backend():
+        """Loading the model costs seconds; the hotkey costs nothing. Warming
+        on a background thread means the key above is already live, so a press
+        during boot records normally and only the transcription waits."""
+        started = time.monotonic()
+        backend.warm()
+        # Backends that can fail every rung of their chain say so, and the tray
+        # must not advertise dictation that will silently return "" forever.
+        # Absent on macOS, where reaching this line means it loaded.
+        usable = getattr(backend, "stt_usable", None)
+        if usable is not None and not usable():
+            print("[Voice] transcricao indisponivel - o tray nao vai marcar pronto")
+            return
+        print(f"[Voice] modelo pronto em {time.monotonic() - started:.1f}s")
+        if orb_state is not None:
+            orb_state.set_ready(True)
+
+    threading.Thread(target=_warm_backend, name="laris-warm", daemon=True).start()
     vad = None
     vad_unavailable = False
     # ASSISTANT_MODE=always_on (the tray "Hands-free" checkbox) boots straight

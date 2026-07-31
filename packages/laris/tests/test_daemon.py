@@ -1,4 +1,5 @@
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -430,8 +431,104 @@ def test_daemon_run_accepts_orb_state_parameter(monkeypatch):
             orb_state=orb_state,
         )
 
-    # After warm(), ready should be set to True
-    assert orb_state.snapshot().ready is True
+    # warm() now runs on a background thread so the hotkey does not wait for
+    # the model, so poll instead of asserting on thread scheduling luck.
+    assert _wait_until(lambda: orb_state.snapshot().ready is True)
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_hotkey_is_live_before_the_model_finishes_loading(monkeypatch):
+    """The point of warming on a thread: loading the model costs seconds, and
+    the PTT key used to be dead for all of them. Holding the key during boot
+    must record, not be swallowed."""
+    import laris.daemon as daemon_mod
+    import laris.platform as platform_mod
+    import laris.hotkey as hotkey_mod
+
+    still_loading = threading.Event()
+    events = []
+
+    class SlowBackend:
+        def warm(self):
+            events.append("warm-start")
+            still_loading.wait(5)          # model not ready yet
+            events.append("warm-done")
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+        def start(self): events.append("hotkey")
+
+    def stop_at_loop(*a, **k):
+        events.append("loop")
+        raise _StopLoop
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: SlowBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", stop_at_loop)
+
+    try:
+        with pytest.raises(_StopLoop):
+            daemon_mod.run(make_voice_session=lambda: MagicMock())
+        # The hotkey is hooked and the loop is accepting input while warm() is
+        # STILL blocked. "warm-done" must be absent: if loading ran inline, it
+        # would have had to finish before the loop was ever reached, which is
+        # exactly the old behaviour this guards against.
+        assert "hotkey" in events and "loop" in events
+        assert "warm-done" not in events
+        assert events.index("hotkey") < events.index("loop")
+    finally:
+        still_loading.set()
+
+
+def test_ready_is_not_reported_when_no_backend_is_usable(monkeypatch):
+    """Regression: a machine where every rung of the STT chain failed still got
+    told "ready", so the tray enabled dictation that returned "" forever."""
+    import laris.daemon as daemon_mod
+    import laris.platform as platform_mod
+    import laris.hotkey as hotkey_mod
+    from laris.orb_state import OrbStateManager
+
+    warmed = threading.Event()
+
+    class DeadBackend:
+        def warm(self): warmed.set()
+        def stt_usable(self): return False
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+        def start(self): pass
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: DeadBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt",
+                        lambda *a, **k: (_ for _ in ()).throw(_StopLoop()))
+
+    orb_state = OrbStateManager()
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(make_voice_session=lambda: MagicMock(), orb_state=orb_state)
+
+    assert warmed.wait(5), "warm() should still have been attempted"
+    assert _wait_until(lambda: orb_state.snapshot().ready is True, timeout=0.5) is False
 
 
 def test_daemon_run_without_orb_state_behaves_as_before(monkeypatch):
