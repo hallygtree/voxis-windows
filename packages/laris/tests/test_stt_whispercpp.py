@@ -5,8 +5,9 @@ The selection chain is the part worth guarding: it decides between a discrete
 GPU, an integrated one, the Parakeet CPU fallback and Whisper on CPU, and every
 rung has a different failure mode that used to be invisible in a windowed exe.
 """
-import wave
 import io
+import pathlib
+import wave
 
 import numpy as np
 import pytest
@@ -57,7 +58,9 @@ def _isolate(monkeypatch, tmp_path):
     writes to the user's actual ~/.config/voice-at."""
     FakeServer.instances = []
     monkeypatch.setenv("VOXIS_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(runtime, "ensure_model", lambda spec: f"/models/{spec.filename}")
+    # a Path, like the real ensure_model - callers read .name off it
+    monkeypatch.setattr(runtime, "ensure_model",
+                        lambda spec: pathlib.Path("/models") / spec.filename)
     monkeypatch.setattr(runtime, "WhisperServer", FakeServer)
     monkeypatch.setattr(runtime, "vulkan_devices", lambda: [])
 

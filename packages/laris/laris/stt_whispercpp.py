@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import tempfile
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,7 +83,14 @@ class WhisperCppTranscriber:
               "could be downloaded.")
 
     def _candidates(self, allow_parakeet: bool):
-        device = runtime.best_device(runtime.vulkan_devices())
+        # Boot timings go to the log because "startup is slow" is otherwise
+        # undiagnosable from a user's laris-engine.log - which already cost one
+        # wrong diagnosis on someone else's machine.
+        started = time.monotonic()
+        devices = runtime.vulkan_devices()
+        print(f"[STT] gpu probe {time.monotonic() - started:.2f}s "
+              f"({len(devices)} device(s))")
+        device = runtime.best_device(devices)
         if device is not None:
             yield lambda: self._start_whisper(device)
         if allow_parakeet and (config.STT_LANGUAGE or "en") in runtime.PARAKEET_LANGUAGES:
@@ -92,11 +100,15 @@ class WhisperCppTranscriber:
     def _start_whisper(self, device: runtime.VulkanDevice | None) -> None:
         self.backend = "whisper"
         self.device = f"vulkan:{device.index} ({device.name})" if device else "cpu"
+        started = time.monotonic()
         model = runtime.resolve_whisper_model(config.STT_MODEL_GGML)
+        fetched = time.monotonic()
         server = runtime.WhisperServer(model, device, config.STT_LANGUAGE)
         server.start()
         self._server = server
-        print(f"[STT] whisper.cpp large-v3-turbo on {self.device}")
+        print(f"[STT] whisper.cpp {model.name} on {self.device} "
+              f"(model {fetched - started:.2f}s, server "
+              f"{time.monotonic() - fetched:.2f}s)")
 
     def _start_parakeet(self) -> None:
         self.backend = "parakeet"
@@ -109,10 +121,20 @@ class WhisperCppTranscriber:
         """Absorbs model load and, on the very first launch, Vulkan pipeline
         compilation (~25s measured; the driver caches it, so later launches are
         under a second). Never raises: daemon.run calls it unguarded."""
+        started = time.monotonic()
         try:
             self.transcribe(np.zeros(config.SAMPLE_RATE // 2, dtype=np.float32))
         except Exception as exc:  # noqa: BLE001
             print(f"[STT] warm-up failed ({exc}); continuing")
+            return
+        elapsed = time.monotonic() - started
+        note = ""
+        if elapsed > 5.0:
+            # ggml has no VkPipelineCache of its own, so the driver's on-disk
+            # cache is all there is, and it is keyed by the binary: a new
+            # ggml-vulkan.dll pays for compiling every shader again.
+            note = " (first run with this build - compiling GPU shaders)"
+        print(f"[STT] warm-up {elapsed:.2f}s{note}")
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = config.SAMPLE_RATE) -> str:
         if len(audio) == 0:
