@@ -91,7 +91,16 @@ jobs:
         shell: pwsh
         working-directory: whisper.cpp
         run: |
-          cmake -B build -DGGML_VULKAN=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=ON
+          # GGML_NATIVE defaults to ON, which tunes the build for the CPU of
+          # whatever machine compiled it - here a GitHub runner. Binaries built
+          # that way died instantly with STATUS_ILLEGAL_INSTRUCTION
+          # (0xC000001D) on a laptop whose CPU lacked the runner's instruction
+          # set, taking every backend down with them including the GPU path.
+          # NATIVE=OFF plus CPU_ALL_VARIANTS builds one CPU backend per
+          # instruction-set tier and picks at run time; BACKEND_DL is what
+          # makes those variants loadable, so the three go together. Same
+          # combination llama.cpp uses for its redistributable releases.
+          cmake -B build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=ON -DGGML_BACKEND_DL=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=ON
           cmake --build build --config Release -j 4
           foreach ($dest in @("../packages/laris/whispercpp", "../packages/miris/whispercpp")) {
             New-Item -ItemType Directory -Force -Path $dest | Out-Null

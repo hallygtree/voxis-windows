@@ -1,6 +1,6 @@
 [package]
 name = "tray"
-version = "0.3.0"
+version = "0.3.1"
 description = "VOXIS tray - control surface for LARIS (dictation) and MIRIS (meetings)"
 authors = ["sammyjdev"]
 edition = "2021"

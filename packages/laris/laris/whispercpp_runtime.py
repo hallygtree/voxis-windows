@@ -43,6 +43,25 @@ PARAKEET_LANGUAGES = frozenset(
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+# Windows NTSTATUS values a crashing ggml binary actually produces. The raw
+# number tells you nothing; the name points straight at the cause.
+_EXIT_STATUS = {
+    0xC000001D: "STATUS_ILLEGAL_INSTRUCTION - the binary uses CPU instructions "
+                "this machine does not have (built without GGML_CPU_ALL_VARIANTS?)",
+    0xC0000005: "STATUS_ACCESS_VIOLATION",
+    0xC0000135: "STATUS_DLL_NOT_FOUND - a DLL is missing next to the executable",
+    0xC0000142: "STATUS_DLL_INIT_FAILED",
+    0xC00000FD: "STATUS_STACK_OVERFLOW",
+}
+
+
+def describe_exit(code: int) -> str:
+    """Exit codes from a crashed Windows process are unsigned NTSTATUS values.
+    Printing 3221225501 tells a reader nothing; naming it does."""
+    named = _EXIT_STATUS.get(code & 0xFFFFFFFF)
+    return f"exit code {code}" + (f" = {named}" if named else "")
+
+
 @dataclass(frozen=True)
 class VulkanDevice:
     index: int
@@ -114,10 +133,18 @@ def vulkan_devices() -> list[VulkanDevice]:
         print(f"[STT] Vulkan probe failed ({exc}); assuming no GPU")
         return []
     blob = (proc.stdout or "") + (proc.stderr or "")
-    return [
+    devices = [
         VulkanDevice(index=int(m.group(1)), name=m.group(2), integrated=m.group(3) == "1")
         for m in _DEVICE_RE.finditer(blob)
     ]
+    # A crashed probe returns no devices, which is indistinguishable from a
+    # machine that genuinely has none - and reporting "no GPU" for a machine
+    # with a working card sends whoever reads the log after the driver instead
+    # of the binary. Say which one it was.
+    if not devices and proc.returncode != 0:
+        print(f"[STT] the GPU probe crashed ({describe_exit(proc.returncode)}); "
+              "this is a broken whisper.cpp binary, not a missing GPU")
+    return devices
 
 
 def best_device(devices: list[VulkanDevice]) -> VulkanDevice | None:
@@ -216,7 +243,7 @@ class WhisperServer:
         while time.time() < deadline:
             if self._proc is not None and self._proc.poll() is not None:
                 raise RuntimeError(
-                    f"whisper-server exited with code {self._proc.returncode}"
+                    f"whisper-server exited: {describe_exit(self._proc.returncode)}"
                 )
             try:
                 urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=2)
@@ -261,8 +288,11 @@ def parakeet_transcribe(model: Path, wav_path: Path) -> str:
         creationflags=_NO_WINDOW,
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"parakeet-cli failed ({proc.returncode}): "
-                           f"{(proc.stderr or '')[-300:]}")
+        # Lead with the decoded status: ggml prints its device banner to stderr
+        # on every run, so a raw tail buries the actual failure under a wall of
+        # unrelated hardware detail.
+        raise RuntimeError(f"parakeet-cli failed: {describe_exit(proc.returncode)}"
+                           f" | stderr tail: {(proc.stderr or '').strip()[-200:]}")
     return (proc.stdout or "").strip()
 
 

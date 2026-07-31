@@ -13,6 +13,10 @@ import pytest
 
 from laris import whispercpp_runtime as runtime
 
+# Captured at import, before the autouse fixture below swaps it for a stub -
+# the probe's own behaviour is what one test needs to exercise.
+_REAL_VULKAN_DEVICES = runtime.vulkan_devices
+
 # verbatim from `whisper-cli --help` on a laptop with both an iGPU and a dGPU
 BANNER = """ggml_vulkan: Found 2 Vulkan devices:
 ggml_vulkan: 0 = Intel(R) Iris(R) Xe Graphics (Intel Corporation) | uma: 1 | fp16: 1 | bf16: 0
@@ -199,6 +203,36 @@ def test_wav_bytes_roundtrip():
     with wave.open(io.BytesIO(mod._wav_bytes(audio, 16000)), "rb") as w:
         assert (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, 16000)
         assert w.getnframes() == 800
+
+
+def test_describe_exit_names_the_illegal_instruction_status():
+    """Regression: binaries built with GGML_NATIVE=ON died with 3221225501 on a
+    CPU older than the build machine's. The bare number sent the reader looking
+    at GPU drivers; the name points at the binary."""
+    described = runtime.describe_exit(3221225501)
+    assert "0xC000001D" or "ILLEGAL_INSTRUCTION" in described
+    assert "ILLEGAL_INSTRUCTION" in described
+    assert "3221225501" in described
+    # an ordinary failure still reads sensibly
+    assert runtime.describe_exit(1) == "exit code 1"
+
+
+def test_crashed_gpu_probe_is_not_reported_as_a_missing_gpu(monkeypatch, capsys, tmp_path):
+    """Regression: vulkan_devices() ignored the exit code, so a binary that
+    crashed before printing produced 'no GPU found' on a machine with a working
+    RTX 3050 - sending the next reader after the driver instead of the build."""
+    cli = tmp_path / ("whisper-cli.exe" if __import__("os").name == "nt" else "whisper-cli")
+    cli.write_text("")
+    monkeypatch.setattr(runtime, "binaries_dir", lambda: tmp_path)
+
+    class Crashed:
+        returncode, stdout, stderr = 3221225501, "", ""
+
+    monkeypatch.setattr(runtime.subprocess, "run", lambda *a, **k: Crashed())
+    assert _REAL_VULKAN_DEVICES() == []
+    out = capsys.readouterr().out
+    assert "crashed" in out and "ILLEGAL_INSTRUCTION" in out
+    assert "no GPU" not in out
 
 
 def test_parakeet_path_shells_out_and_cleans_up(monkeypatch, tmp_path):
