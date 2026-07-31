@@ -293,6 +293,90 @@ def resolve_whisper_model(name: str, on_status=None) -> Path:
     return ensure_model(WHISPER_MODEL, on_status)
 
 
+def _kill_on_death_job():
+    """A Windows job object that kills its members when this process dies.
+
+    atexit only runs on a clean interpreter exit, and the tray stops dictation
+    with TerminateProcess - so every stop leaked a whisper-server still holding
+    the model in VRAM. Three orphans were found on a 4 GB card holding ~1.9 GB
+    between them, the oldest from the previous day. A job object with
+    KILL_ON_JOB_CLOSE is the only mechanism that survives a forced kill: the
+    kernel closes the handle when we die and takes the members with it.
+
+    The handle is deliberately kept for the life of the process - closing it is
+    exactly what triggers the kill."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_ulonglong) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class BASIC_LIMITS(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.POINTER(wintypes.ULONG)),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class EXTENDED_LIMITS(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BASIC_LIMITS),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    JobObjectExtendedLimitInformation = 9
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        info = EXTENDED_LIMITS()
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            job, JobObjectExtendedLimitInformation,
+            ctypes.byref(info), ctypes.sizeof(info),
+        ):
+            kernel32.CloseHandle(job)
+            return None
+        return job
+    except Exception as exc:  # noqa: BLE001 - a leaked child beats no engine
+        print(f"[STT] could not create the process job ({exc}); "
+              "whisper-server may outlive a forced kill")
+        return None
+
+
+# Created once and held: closing this handle is what kills the children.
+_JOB = _kill_on_death_job()
+
+
+def _adopt_into_job(proc) -> None:
+    if _JOB is None or os.name != "nt":
+        return
+    import ctypes
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if not kernel32.AssignProcessToJobObject(_JOB, int(proc._handle)):
+            print("[STT] whisper-server could not be added to the process job; "
+                  "it may outlive a forced kill")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[STT] could not add whisper-server to the process job ({exc})")
+
+
 def _free_port() -> int:
     import socket
     with socket.socket() as s:
@@ -327,9 +411,11 @@ class WhisperServer:
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=_NO_WINDOW, env=ggml_env(),
         )
-        # A leaked server holds the model in VRAM for the life of the session.
-        # The daemon does not always get to shut down cleanly (the tray kills
-        # it), so registering here rather than relying on callers.
+        # Two layers, because a leaked server holds the model in VRAM for the
+        # life of the session: the job object covers a forced kill (the tray's
+        # usual way of stopping dictation), atexit covers a clean exit and
+        # non-Windows.
+        _adopt_into_job(self._proc)
         atexit.register(self.stop)
         self._wait_until_listening()
 
