@@ -57,65 +57,18 @@ jobs:
           python-version: "3.11"
 
       # whisper.cpp is the STT engine on Windows. Upstream publishes no Vulkan
-      # asset (only cpu / blas / cublas), so it is built here from a pinned
-      # tag. Vulkan is what makes GPU acceleration work on AMD and Intel as
-      # well as NVIDIA, and its loader ships with the GPU driver - the CUDA
-      # route needed ~2 GB of redistributable DLLs for NVIDIA alone.
-      - name: Checkout whisper.cpp
+      # asset (only cpu / blas / cublas), so it is built here from a pinned tag.
+      # Vulkan is what makes GPU acceleration work on AMD and Intel as well as
+      # NVIDIA, and its loader ships with the GPU driver - the CUDA route needed
+      # ~2 GB of redistributable DLLs for NVIDIA alone.
+      #
+      # The checkout, cache and build live in a composite action shared with
+      # whispercpp-cache.yml, which is what writes the cache on the default
+      # branch: Actions scopes caches by ref, so a cache written by one tag run
+      # is invisible to the next.
+      - name: whisper.cpp (Vulkan)
         if: matrix.platform == 'windows-latest'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          repository: ggml-org/whisper.cpp
-          ref: v1.9.1
-          path: whisper.cpp
-
-      # Reuse the binaries across releases. ggml keeps no VkPipelineCache of its
-      # own, so the driver's on-disk shader cache is all there is - and it is
-      # keyed by the binary. Recompiling every run produced a different
-      # ggml-vulkan.dll each time, which made every VOXIS update cost the user
-      # another ~11s of shader compilation on their first transcription. The key
-      # covers everything that changes the output.
-      - name: Cache whisper.cpp build
-        if: matrix.platform == 'windows-latest'
-        id: whispercpp-cache
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
-        with:
-          path: whisper.cpp/build/bin/Release
-          key: whispercpp-v1.9.1-vulkan1.4.313.2-cpuvariants-${{ runner.os }}
-
-      # Install recipe mirrored from llama.cpp's own release workflow, which
-      # exercises the same ggml Vulkan backend every release.
-      - name: Install Vulkan SDK
-        if: matrix.platform == 'windows-latest' && steps.whispercpp-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        env:
-          VULKAN_VERSION: 1.4.313.2
-        run: |
-          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
-          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
-
-      # Each engine is its own onedir bundle resolving the binaries through
-      # sys._MEIPASS, so both need a copy. The specs hard-fail when this
-      # directory is missing rather than shipping an engine that cannot
-      # transcribe - it is packaged windowed, so that would fail in silence.
-      - name: Build whisper.cpp (Vulkan)
-        if: matrix.platform == 'windows-latest' && steps.whispercpp-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        working-directory: whisper.cpp
-        run: |
-          # GGML_NATIVE defaults to ON, which tunes the build for the CPU of
-          # whatever machine compiled it - here a GitHub runner. Binaries built
-          # that way died instantly with STATUS_ILLEGAL_INSTRUCTION
-          # (0xC000001D) on a laptop whose CPU lacked the runner's instruction
-          # set, taking every backend down with them including the GPU path.
-          # NATIVE=OFF plus CPU_ALL_VARIANTS builds one CPU backend per
-          # instruction-set tier and picks at run time; BACKEND_DL is what
-          # makes those variants loadable, so the three go together. Same
-          # combination llama.cpp uses for its redistributable releases.
-          cmake -B build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=ON -DGGML_BACKEND_DL=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=ON
-          cmake --build build --config Release -j 4
+        uses: ./.github/actions/whispercpp-build
 
       # Separate from the build so it still runs on a cache hit, and so a cache
       # that restored something unusable fails here rather than shipping an

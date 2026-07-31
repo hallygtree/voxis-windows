@@ -1,0 +1,60 @@
+name: Build whisper.cpp (Vulkan)
+description: >
+  Checks out a pinned whisper.cpp, restores or builds the Vulkan binaries, and
+  leaves them in whisper.cpp/build/bin/Release. Shared between tray-build and
+  the cache-warming workflow so the cache key lives in exactly one place: two
+  copies that drift apart do not fail, they just silently never hit.
+
+runs:
+  using: composite
+  steps:
+    # Building a third party's source, so pin the ref.
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        repository: ggml-org/whisper.cpp
+        ref: v1.9.1
+        path: whisper.cpp
+
+    # ggml keeps no VkPipelineCache of its own, so the driver's on-disk shader
+    # cache is all there is - and it is keyed by the binary. Rebuilding every
+    # release produced a different ggml-vulkan.dll each time, making every
+    # update cost the user another first-run shader compile. Reusing the build
+    # keeps the binary stable across releases.
+    #
+    # BUMP THIS KEY whenever the ref or the cmake flags below change: nothing
+    # derives it from them, so a stale key would serve the wrong binaries.
+    - id: cache
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+      with:
+        path: whisper.cpp/build/bin/Release
+        key: whispercpp-v1.9.1-vulkan1.4.313.2-cpuvariants-${{ runner.os }}
+
+    # Install recipe mirrored from llama.cpp's own release workflow, which
+    # exercises the same ggml Vulkan backend every release.
+    - name: Install Vulkan SDK
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      env:
+        VULKAN_VERSION: 1.4.313.2
+      run: |
+        curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+        & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+        Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+        Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
+    - name: Build whisper.cpp (Vulkan)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      working-directory: whisper.cpp
+      run: |
+        # GGML_NATIVE defaults to ON, which tunes the build for the CPU of
+        # whatever machine compiled it - here a GitHub runner. Binaries built
+        # that way died instantly with STATUS_ILLEGAL_INSTRUCTION (0xC000001D)
+        # on a laptop whose CPU lacked the runner's instruction set, taking
+        # every backend down with them including the GPU path. NATIVE=OFF plus
+        # CPU_ALL_VARIANTS builds one CPU backend per instruction-set tier and
+        # picks at run time; BACKEND_DL is what makes those variants loadable,
+        # so the three go together. Same combination llama.cpp uses for its
+        # redistributable releases.
+        cmake -B build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=ON -DGGML_BACKEND_DL=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=ON
+        cmake --build build --config Release -j 4

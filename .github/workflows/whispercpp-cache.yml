@@ -1,0 +1,41 @@
+name: whispercpp-cache
+
+# Populates the whisper.cpp build cache on the default branch.
+#
+# GitHub scopes Actions caches by ref: a run reads caches from its own ref and
+# from the default branch, and nothing else. Every release here is a tag push,
+# and each tag is its own ref - so a cache written by a release run is unusable
+# by the next one, and tray-build re-compiled whisper.cpp every single time even
+# with a cache configured. Writing the cache from master is what makes it
+# readable by the tag runs that actually need it.
+#
+# On a hit this job restores and exits in well under a minute; it only pays for
+# a real build when the key is new or the cache has expired.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A release tag push and a master push can land together; the second run would
+# only duplicate work the first is already doing.
+concurrency:
+  group: whispercpp-cache
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    runs-on: windows-latest
+    steps:
+      # needed for the local composite action below
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: ./.github/actions/whispercpp-build
+
+      - name: Report what is cached
+        shell: pwsh
+        run: |
+          Get-ChildItem whisper.cpp/build/bin/Release |
+            ForEach-Object { "{0,12:N0}  {1}" -f $_.Length, $_.Name }
