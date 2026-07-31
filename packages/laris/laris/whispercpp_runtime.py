@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -107,6 +108,32 @@ def models_dir() -> Path:
     ).expanduser()
 
 
+def state_dir() -> Path:
+    return Path(
+        os.environ.get("VOXIS_STATE_DIR", "~/.config/voice-at")
+    ).expanduser()
+
+
+def ggml_env() -> dict:
+    """Environment for every ggml child process.
+
+    GGML_VK_DISABLE_COOPMAT2: the NV_coopmat2 kernels are enormously expensive
+    to compile the first time a given ggml-vulkan.dll runs on a machine -
+    measured on an RTX 3050, the first inference took 14.6s with them and 3.9s
+    without - while making no measurable difference afterwards (1.40/1.43/1.44s
+    with, 1.42/1.36/1.39s without). ggml keeps no VkPipelineCache of its own, so
+    that cost is entirely at the driver's mercy and is re-paid whenever the DLL
+    changes. Disabling coopmat *entirely* is the mistake to avoid: that one
+    costs 31% (1.78s vs 1.36s).
+
+    setdefault, not assignment: a user who exports the variable wins, so the
+    trade can be re-tested on other hardware without rebuilding.
+    """
+    env = dict(os.environ)
+    env.setdefault("GGML_VK_DISABLE_COOPMAT2", "1")
+    return env
+
+
 def _exe(name: str) -> Path:
     return binaries_dir() / (name + (".exe" if os.name == "nt" else ""))
 
@@ -117,7 +144,7 @@ def cpu_threads() -> int:
     return max(1, os.cpu_count() or 4)
 
 
-def vulkan_devices() -> list[VulkanDevice]:
+def probe_vulkan_devices() -> list[VulkanDevice]:
     """Enumerate Vulkan devices by asking a ggml binary. Returns [] when there
     is no Vulkan loader, no driver, or no binary - all of which mean 'no GPU'
     and must not raise."""
@@ -127,7 +154,7 @@ def vulkan_devices() -> list[VulkanDevice]:
     try:
         proc = subprocess.run(
             [str(cli), "--help"], capture_output=True, text=True, errors="replace",
-            timeout=60, creationflags=_NO_WINDOW,
+            timeout=60, creationflags=_NO_WINDOW, env=ggml_env(),
         )
     except Exception as exc:  # noqa: BLE001 - probing must never kill the daemon
         print(f"[STT] Vulkan probe failed ({exc}); assuming no GPU")
@@ -145,6 +172,57 @@ def vulkan_devices() -> list[VulkanDevice]:
         print(f"[STT] the GPU probe crashed ({describe_exit(proc.returncode)}); "
               "this is a broken whisper.cpp binary, not a missing GPU")
     return devices
+
+
+def _binary_stamp() -> str:
+    """Identity of the binary the cache was built from. A new whisper.cpp build
+    can enumerate differently, so the cache must not outlive it."""
+    try:
+        st = _exe("whisper-cli").stat()
+        return f"{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        return ""
+
+
+def vulkan_devices() -> list[VulkanDevice]:
+    """Cached device list. The probe costs ~0.38s and a whole process launch to
+    discover a hardware fact that almost never changes, and it sits on the boot
+    critical path. Cache invalidates when the binary changes.
+
+    Every failure path here falls through to a live probe: a cache is not worth
+    a boot failure."""
+    cache = state_dir() / "gpu-probe.json"
+    stamp = _binary_stamp()
+    try:
+        blob = json.loads(cache.read_text(encoding="utf-8"))
+        if blob.get("binary") == stamp and stamp:
+            return [VulkanDevice(**d) for d in blob["devices"]]
+    except Exception:  # noqa: BLE001 - missing/corrupt/stale all mean "re-probe"
+        pass
+
+    devices = probe_vulkan_devices()
+    try:
+        _write_atomic(cache, json.dumps({
+            "binary": stamp,
+            "devices": [d.__dict__ for d in devices],
+        }))
+    except OSError as exc:
+        print(f"[STT] could not cache the GPU probe ({exc}); re-probing every boot")
+    return devices
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Same mkstemp + os.replace shape as orb_theme._write_atomic and
+    peer_discovery.write_peer - a half-written cache must never be readable."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def best_device(devices: list[VulkanDevice]) -> VulkanDevice | None:
@@ -228,7 +306,7 @@ class WhisperServer:
             cmd += ["-ng"]
         self._proc = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=_NO_WINDOW,
+            creationflags=_NO_WINDOW, env=ggml_env(),
         )
         # A leaked server holds the model in VRAM for the life of the session.
         # The daemon does not always get to shut down cleanly (the tray kills
@@ -285,7 +363,7 @@ def parakeet_transcribe(model: Path, wav_path: Path) -> str:
         [str(_exe("parakeet-cli")), "-m", str(model), "-f", str(wav_path),
          "-ng", "-t", str(cpu_threads()), "-np"],
         capture_output=True, text=True, errors="replace", timeout=600,
-        creationflags=_NO_WINDOW,
+        creationflags=_NO_WINDOW, env=ggml_env(),
     )
     if proc.returncode != 0:
         # Lead with the decoded status: ggml prints its device banner to stderr

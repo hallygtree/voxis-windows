@@ -13,8 +13,8 @@ import pytest
 
 from laris import whispercpp_runtime as runtime
 
-# Captured at import, before the autouse fixture below swaps it for a stub -
-# the probe's own behaviour is what one test needs to exercise.
+# Captured at import: the autouse fixture below stubs runtime.vulkan_devices so
+# the construction tests see "no GPU", but the caching tests need the real one.
 _REAL_VULKAN_DEVICES = runtime.vulkan_devices
 
 # verbatim from `whisper-cli --help` on a laptop with both an iGPU and a dGPU
@@ -52,9 +52,11 @@ class FakeServer:
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch):
-    """No real binaries, no real downloads, no real subprocesses."""
+def _isolate(monkeypatch, tmp_path):
+    """No real binaries, no real downloads, no real subprocesses - and no
+    writes to the user's actual ~/.config/voice-at."""
     FakeServer.instances = []
+    monkeypatch.setenv("VOXIS_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(runtime, "ensure_model", lambda spec: f"/models/{spec.filename}")
     monkeypatch.setattr(runtime, "WhisperServer", FakeServer)
     monkeypatch.setattr(runtime, "vulkan_devices", lambda: [])
@@ -229,10 +231,70 @@ def test_crashed_gpu_probe_is_not_reported_as_a_missing_gpu(monkeypatch, capsys,
         returncode, stdout, stderr = 3221225501, "", ""
 
     monkeypatch.setattr(runtime.subprocess, "run", lambda *a, **k: Crashed())
-    assert _REAL_VULKAN_DEVICES() == []
+    assert runtime.probe_vulkan_devices() == []
     out = capsys.readouterr().out
     assert "crashed" in out and "ILLEGAL_INSTRUCTION" in out
     assert "no GPU" not in out
+
+
+def test_coopmat2_is_disabled_by_default_but_the_user_wins(monkeypatch):
+    """The NV_coopmat2 kernels cost ~11s of first-run shader compilation and
+    bought nothing measurable afterwards, so they are off by default - but the
+    trade was measured on one GPU, so an explicit value has to survive."""
+    monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT2", raising=False)
+    assert runtime.ggml_env()["GGML_VK_DISABLE_COOPMAT2"] == "1"
+
+    monkeypatch.setenv("GGML_VK_DISABLE_COOPMAT2", "0")
+    assert runtime.ggml_env()["GGML_VK_DISABLE_COOPMAT2"] == "0"
+
+
+def _probe_counter(monkeypatch, devices):
+    calls = []
+
+    def fake_probe():
+        calls.append(1)
+        return list(devices)
+
+    monkeypatch.setattr(runtime, "probe_vulkan_devices", fake_probe)
+    return calls
+
+
+def test_gpu_probe_is_cached_between_boots(monkeypatch, tmp_path):
+    """The probe costs ~0.38s and a whole process launch on the boot path, for
+    a hardware fact that almost never changes."""
+    monkeypatch.setenv("VOXIS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(runtime, "_binary_stamp", lambda: "123:456")
+    calls = _probe_counter(monkeypatch, [DGPU])
+
+    assert _REAL_VULKAN_DEVICES() == [DGPU]
+    assert _REAL_VULKAN_DEVICES() == [DGPU]
+    assert len(calls) == 1, "second boot must read the cache, not re-probe"
+    assert (tmp_path / "gpu-probe.json").is_file()
+
+
+def test_a_new_binary_invalidates_the_probe_cache(monkeypatch, tmp_path):
+    """A different whisper.cpp build can enumerate differently, so the cache
+    must not outlive the binary it was taken from."""
+    monkeypatch.setenv("VOXIS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(runtime, "_binary_stamp", lambda: "old")
+    calls = _probe_counter(monkeypatch, [DGPU])
+    _REAL_VULKAN_DEVICES()
+
+    monkeypatch.setattr(runtime, "_binary_stamp", lambda: "new")
+    _REAL_VULKAN_DEVICES()
+    assert len(calls) == 2
+
+
+def test_corrupt_probe_cache_falls_back_to_probing(monkeypatch, tmp_path):
+    """A cache is never worth a boot failure - same self-healing shape as
+    orb_theme.load_theme."""
+    monkeypatch.setenv("VOXIS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(runtime, "_binary_stamp", lambda: "123:456")
+    (tmp_path / "gpu-probe.json").write_text("{not json", encoding="utf-8")
+    calls = _probe_counter(monkeypatch, [IGPU])
+
+    assert _REAL_VULKAN_DEVICES() == [IGPU]
+    assert len(calls) == 1
 
 
 def test_parakeet_path_shells_out_and_cleans_up(monkeypatch, tmp_path):
