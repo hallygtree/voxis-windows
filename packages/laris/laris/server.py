@@ -19,6 +19,7 @@ from laris import auth as laris_auth
 from laris.events import VoiceEvent
 from laris import orb_theme
 from laris.orb_state import OrbStateManager
+from laris.runtime_mode import ModeState, ModeValidationError
 
 def _frontend_dir() -> Path:
     return Path(getattr(sys, "_MEIPASS", Path(__file__).parent.parent)) / "frontend"
@@ -35,18 +36,21 @@ def get_voice_event_queue(app: FastAPI) -> "thread_queue.Queue[VoiceEvent]":
     return app.state.voice_events
 
 
-def build_app(token: str, voice_queue: "thread_queue.Queue[VoiceEvent] | None" = None, orb_state: OrbStateManager | None = None) -> FastAPI:
+def build_app(token: str, voice_queue: "thread_queue.Queue[VoiceEvent] | None" = None, orb_state: OrbStateManager | None = None, mode_state: ModeState | None = None) -> FastAPI:
     """voice_queue: pass the SAME queue instance the PTT daemon loop pushes
     into so this app's /ws/voice actually streams live events instead of an
     unconnected queue nobody writes to. Defaults to a fresh, disconnected
     queue for standalone testing.
     orb_state: pass the SAME OrbStateManager instance the daemon uses so
     /overlay/state reflects live visibility/readiness changes. Defaults to
-    a fresh, disconnected manager for standalone testing."""
+    a fresh, disconnected manager for standalone testing.
+    mode_state: pass the SAME ModeState the daemon loop reads, so the tray's
+    hands-free toggle applies without restarting the engine."""
     app = FastAPI()
     app.state.token = token
     app.state.voice_events = voice_queue if voice_queue is not None else thread_queue.Queue()
     app.state.orb_state = orb_state if orb_state is not None else OrbStateManager()
+    app.state.mode_state = mode_state if mode_state is not None else ModeState()
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
     @app.get("/overlay")
@@ -92,6 +96,25 @@ def build_app(token: str, voice_queue: "thread_queue.Queue[VoiceEvent] | None" =
         except orb_theme.ThemeValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"theme": theme, "palettes": orb_theme.PALETTES}
+
+    @app.get("/mode")
+    def get_mode(token: str | None = None):
+        if not laris_auth.token_valid(token, app.state.token):
+            raise HTTPException(status_code=403, detail="invalid token")
+        return {"mode": app.state.mode_state.mode}
+
+    @app.post("/mode")
+    def post_mode(updates: dict, token: str | None = None):
+        """Applies ASSISTANT_MODE to the running loop. The tray owns the
+        persisted file (laris-settings.json); this only moves the live flag, so
+        there is never a second writer racing it."""
+        if not laris_auth.token_valid(token, app.state.token):
+            raise HTTPException(status_code=403, detail="invalid token")
+        try:
+            mode = app.state.mode_state.set(updates.get("mode"))
+        except ModeValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"mode": mode}
 
     @app.websocket("/ws/voice")
     async def ws_voice(websocket: WebSocket, token: str | None = None):

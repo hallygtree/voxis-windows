@@ -218,3 +218,54 @@ def test_get_overlay_state_wait_clamped(monkeypatch):
 
     assert response.status_code == 200
     assert elapsed < 3.0, f"wait nao foi limitado ao teto: levou {elapsed:.1f}s"
+
+
+def test_post_mode_moves_the_shared_state_the_loop_reads():
+    """The tray toggling hands-free must not need a daemon restart: the same
+    ModeState instance the PTT loop reads has to change in place."""
+    from laris.runtime_mode import ModeState
+    from laris.server import build_app
+
+    mode_state = ModeState("ptt")
+    app = build_app(token="test-token", mode_state=mode_state)
+
+    response = TestClient(app).post("/mode?token=test-token", json={"mode": "always_on"})
+
+    assert response.status_code == 200
+    assert response.json() == {"mode": "always_on"}
+    assert mode_state.hands_free_allowed is True
+
+
+def test_post_mode_rejects_an_unknown_mode():
+    from laris.runtime_mode import ModeState
+    from laris.server import build_app
+
+    mode_state = ModeState("ptt")
+    app = build_app(token="test-token", mode_state=mode_state)
+
+    response = TestClient(app).post("/mode?token=test-token", json={"mode": "listen_always"})
+
+    assert response.status_code == 422
+    assert mode_state.mode == "ptt", "a rejected mode must not change anything"
+
+
+def test_post_mode_requires_the_token():
+    from laris.runtime_mode import ModeState
+    from laris.server import build_app
+
+    mode_state = ModeState("ptt")
+    app = build_app(token="test-token", mode_state=mode_state)
+
+    response = TestClient(app).post("/mode?token=errado", json={"mode": "always_on"})
+
+    assert response.status_code == 403
+    assert mode_state.mode == "ptt"
+
+
+def test_get_mode_reports_the_live_value():
+    from laris.runtime_mode import ModeState
+    from laris.server import build_app
+
+    app = build_app(token="test-token", mode_state=ModeState("always_on"))
+    response = TestClient(app).get("/mode?token=test-token")
+    assert response.json() == {"mode": "always_on"}

@@ -16,6 +16,7 @@ import uvicorn
 from laris import config, peer_discovery
 from laris.auth import generate_token
 from laris.orb_state import OrbStateManager
+from laris.runtime_mode import ModeState
 from laris.peer_client import KirisClient, PanelClient
 from laris.server import build_app
 from laris.state_machine import VoiceSession
@@ -59,7 +60,10 @@ def main() -> None:
 
     voice_queue = queue.Queue()
     orb_state = OrbStateManager()
-    app = build_app(token=laris_token, voice_queue=voice_queue, orb_state=orb_state)
+    # One instance, two readers: POST /mode writes it, the PTT loop reads it.
+    mode_state = ModeState(config.MODE)
+    app = build_app(token=laris_token, voice_queue=voice_queue, orb_state=orb_state,
+                    mode_state=mode_state)
     threading.Thread(
         # access_log=False: the token rides in the query string, and the
         # default access log would write it to the daemon's stdout/log
@@ -105,6 +109,7 @@ def main() -> None:
         voice_queue=voice_queue,
         overlay_url=f"http://127.0.0.1:{LARIS_PORT}/overlay?token={laris_token}",
         orb_state=orb_state,
+        mode_state=mode_state,
     )
 
 

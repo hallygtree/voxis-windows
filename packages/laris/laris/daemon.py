@@ -127,6 +127,7 @@ def run(
     voice_queue=None,
     overlay_url: str = "",
     orb_state=None,
+    mode_state=None,
 ) -> None:
     """Runs the PTT voice loop on the calling thread - callers run this on a
     background daemon thread (see claude-code-ops's backend/main.py)."""
@@ -136,6 +137,10 @@ def run(
     if voice_queue is None:
         import queue
         voice_queue = queue.Queue()
+
+    if mode_state is None:
+        from laris.runtime_mode import ModeState
+        mode_state = ModeState(config.MODE)
 
     backend = get_backend()
     stt = backend
@@ -185,11 +190,10 @@ def run(
     # was safe while the feature did not work, but now it would mean the
     # machine starts listening and typing into whatever happens to be focused
     # the moment the app comes up. The double-tap is the intent signal.
-    hands_free_gesture = ptt.hands_free if config.MODE == "always_on" else None
     kiris = "com Kiris (assistente)" if assistant else "pura (VOICE_ASSISTANT=0, muda)"
     print(
         f"[Voice] Laris (transcritora) pronta, {kiris} - "
-        f"PTT: {config.DICTATE_KEY}, modo: {config.MODE}"
+        f"PTT: {config.DICTATE_KEY}, modo: {mode_state.mode}"
     )
 
     def _reset_orb_if_stale():
@@ -197,6 +201,16 @@ def run(
             voice_queue.put(VoiceEvent(phase=PHASE_IDLE, amplitude=0.0))
 
     while True:
+        # Read the mode every pass, not once at boot: the tray flips it over
+        # HTTP (POST /mode) and used to have to restart the whole engine.
+        if mode_state.hands_free_allowed:
+            hands_free_gesture = ptt.hands_free
+        else:
+            # A double-tap landing while hands-free is off must not queue a
+            # session that fires the moment it is switched on - that is the
+            # "starts listening on its own" hazard the gesture exists to avoid.
+            ptt.hands_free.clear()
+            hands_free_gesture = None
         kind, pressed = _wait_for_ptt(ptt.pressed, hands_free=hands_free_gesture, on_tick=_reset_orb_if_stale)
         if kind == "hands_free":
             # Constructed on first use, and still guarded: a VAD that cannot

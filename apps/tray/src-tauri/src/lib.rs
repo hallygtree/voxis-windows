@@ -371,15 +371,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
                     notify(&app2, &format!("Falha ao salvar: {e}"));
                     return;
                 }
-                // settings load at daemon start only - restart our own daemon to apply
-                let state = app2.state::<AppState>();
-                let mut daemon = state.daemon.lock().unwrap();
-                if daemon.owns_running() {
-                    daemon.stop();
-                    if let Err(e) = daemon.spawn() {
-                        notify(&app2, &format!("Falha ao reiniciar ditado: {e}"));
-                    }
-                }
+                apply_mode(&app2, next);
             });
         }
         id if id.starts_with("theme:") => {
@@ -394,6 +386,29 @@ fn handle_menu(app: &AppHandle, id: &str) {
         }
         _ => {}
     }
+}
+
+/// Push ASSISTANT_MODE to the live daemon. Falls back to a restart only when
+/// the daemon cannot be reached over HTTP - an engine from before /mode
+/// existed, or one that is wedged. A running, reachable daemon must never be
+/// restarted for this: the orb window would be destroyed and the whisper model
+/// reloaded, which is indistinguishable from a crash.
+pub fn apply_mode(app: &AppHandle, mode: &str) {
+    if let Some(peer) = laris::read_peer(&peers_path()) {
+        if laris::set_mode(&peer, mode).is_ok() {
+            return;
+        }
+    }
+    let state = app.state::<AppState>();
+    let mut daemon = state.daemon.lock().unwrap();
+    if daemon.owns_running() {
+        daemon.stop();
+        if let Err(e) = daemon.spawn() {
+            notify(app, &format!("Falha ao reiniciar ditado: {e}"));
+        }
+    }
+    // Not running and not ours: nothing to apply now - the file we just wrote
+    // is what the next boot reads.
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

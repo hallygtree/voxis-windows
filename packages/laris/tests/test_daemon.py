@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from laris.state_machine import (
@@ -399,6 +400,97 @@ def test_ptt_mode_ignores_the_gesture_entirely(monkeypatch):
         daemon_mod.run(make_voice_session=lambda: MagicMock())
 
     assert seen["gesture_wired"] is False
+
+
+def test_mode_flips_live_without_restarting_the_daemon(monkeypatch):
+    """The tray used to restart the engine on every hands-free toggle, which
+    tore down the orb window and reloaded the whisper model - it looked like a
+    crash. The mode is now read every pass of the loop, so POST /mode moving
+    the shared ModeState is enough."""
+    import laris.daemon as daemon_mod
+    import laris.hotkey as hotkey_mod
+    import laris.platform as platform_mod
+    from laris.runtime_mode import ModeState
+
+    class FakeBackend:
+        def warm(self): pass
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+
+        def start(self): pass
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+
+    mode_state = ModeState("ptt")
+    wired = []
+
+    def fake_wait(pressed, hands_free=None, on_tick=lambda: None):
+        wired.append(hands_free is not None)
+        if len(wired) == 1:
+            mode_state.set("always_on")  # what POST /mode does
+            return "dictate", threading.Event()  # one harmless PTT pass
+        raise _StopLoop
+
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", fake_wait)
+    # the loop imports this inside the body, so patch it at the source module
+    import laris.audio_capture as capture_mod
+    monkeypatch.setattr(capture_mod, "record_while",
+                        lambda *a, **k: np.zeros(0, dtype=np.float32))
+
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(make_voice_session=lambda: MagicMock(), mode_state=mode_state)
+
+    assert wired == [False, True], "the same process must see the new mode"
+
+
+def test_gesture_landing_while_off_does_not_queue_a_session(monkeypatch):
+    """A double-tap while hands-free is disabled must be dropped, not held. If
+    it survived, switching the toggle on would immediately open the microphone
+    - the exact 'starts listening on its own' hazard the gesture prevents."""
+    import laris.daemon as daemon_mod
+    import laris.hotkey as hotkey_mod
+    import laris.platform as platform_mod
+    from laris.runtime_mode import ModeState
+
+    class FakeBackend:
+        def warm(self): pass
+        def transcribe(self, audio, sample_rate): return ""
+        def type_text(self, text): pass
+        def make_overlay(self, url, state=None): return MagicMock()
+        def make_ducker(self): return MagicMock()
+
+    ptt_ref = {}
+
+    class FakePTT:
+        def __init__(self, key):
+            self.pressed = threading.Event()
+            self.hands_free = threading.Event()
+            self.hands_free.set()  # stray double-tap from while it was off
+            ptt_ref["ptt"] = self
+
+        def start(self): pass
+
+    monkeypatch.setattr(platform_mod, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(hotkey_mod, "PushToTalk", FakePTT)
+
+    def fake_wait(pressed, hands_free=None, on_tick=lambda: None):
+        raise _StopLoop
+
+    monkeypatch.setattr(daemon_mod, "_wait_for_ptt", fake_wait)
+
+    with pytest.raises(_StopLoop):
+        daemon_mod.run(make_voice_session=lambda: MagicMock(),
+                       mode_state=ModeState("ptt"))
+
+    assert not ptt_ref["ptt"].hands_free.is_set()
 
 
 def test_daemon_run_accepts_orb_state_parameter(monkeypatch):

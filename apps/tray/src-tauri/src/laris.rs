@@ -117,6 +117,17 @@ pub fn set_theme(
     res.body_mut().read_json().map_err(|e| e.to_string())
 }
 
+/// Apply ASSISTANT_MODE to the running daemon without restarting it. The
+/// restart tore down the orb window and reloaded the whisper model, which read
+/// as the app crashing on every hands-free toggle.
+pub fn set_mode(peer: &LarisPeer, mode: &str) -> Result<(), String> {
+    agent()
+        .post(format!("{}/mode?token={}", peer.url, peer.token))
+        .send_json(&serde_json::json!({ "mode": mode }))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub struct LarisDaemon {
     child: Option<Child>,
     laris_dir: PathBuf,
