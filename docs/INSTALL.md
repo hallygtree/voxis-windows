@@ -1,61 +1,146 @@
 # Installing VOXIS
 
-VOXIS installs differently per platform:
+This repository is the **Windows** port of VOXIS. One installer ships the tray
+plus both engines - dictation (`laris`) and meetings (`miris`) - frozen with
+PyInstaller, so there is no system Python, venv or source clone involved. See
+[Windows](#windows) below.
 
-- **macOS (Apple Silicon)** - dictation (`laris`) and meeting recording
-  (`miris`) install from source into Python venvs; they use `mlx-whisper` and
-  Core Audio. The **tray** (`apps/tray`) is optional sugar on top.
-- **Windows** - **dictation only** (meetings are a later phase). One installer
-  ships the tray plus a self-contained dictation engine (frozen with
-  PyInstaller, no system Python). Download it, hold a key, dictate. See
-  [Windows: dictation](#windows-dictation) below.
-
-If you just want dictation or meeting notes on macOS, install the engines. On
-Windows, install the tray - the engine rides inside it.
+macOS (Apple Silicon) is maintained upstream at
+[sammyjdev/voxis](https://github.com/sammyjdev/voxis). The from-source steps
+kept in [macOS (from source)](#macos-from-source) describe that setup, and
+upstream's own docs win where they differ.
 
 ---
 
-## Prerequisites (macOS)
+## Windows
+
+### 1. Install
+
+Download `VOXIS_<version>_x64_en-US.msi` (recommended) or
+`VOXIS_<version>_x64-setup.exe` from the
+[Releases page](https://github.com/hallygtree/voxis-windows/releases) and run
+it. The build is unsigned, so SmartScreen warns once - see
+[Unsigned builds](#unsigned-builds).
+
+### 2. Allow the microphone
+
+Windows has no accessibility prompt like macOS. Enable the microphone under
+**Settings > Privacy & security > Microphone**, including **Let desktop apps
+access your microphone**.
+
+### 3. Dictate
+
+Hold the activation key (**Right-Shift** by default), speak, release - the text
+is pasted into the focused app. Change the key in the tray's
+**Configurações...** window.
+
+For hands-free, check **Hands-free (duplo-toque na tecla)** in the tray menu
+(or **Permitir hands-free** in settings), then double-tap the
+key: VOXIS keeps listening and types each sentence as you finish it. Tap once
+to stop.
+
+### 4. Record meetings (optional)
+
+Meeting notes need an LLM CLI on your `PATH` for the summary. The default is
+the [Antigravity CLI](https://antigravity.google) (`agy`), logged in; any
+prompt-in / text-out CLI works.
+
+Then use **Gravar reunião** in the tray to start and **Parar gravação** to
+stop. VOXIS records your mic and the default speaker (WASAPI loopback),
+transcribes both, summarizes, and writes the note into your vault. **Última
+nota** opens the most recent one.
+
+Config is created on first run at `~/.miris/config.toml`: vault root,
+category-to-folder map, and `llm_command`. Point `vault_root` at your Obsidian
+vault before the first meeting. Raw recordings stay under
+`~/.miris/sessions/<timestamp>/` until you delete them.
+
+Tip: use a headset. Without one the mic also picks up the speakers, so your
+channel echoes the other side.
+
+### First run downloads the speech model
+
+Speech recognition runs on [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+with the Vulkan backend. On first use the engine downloads Whisper
+`large-v3-turbo` (q5_0, 547 MB) from Hugging Face into
+`~/.config/voice-at/models/`, and compiles its GPU shaders (about 25 s, once per
+driver and build). The tray menu shows progress while this happens. After that
+it runs fully offline.
+
+- **GPU.** Any Vulkan-capable GPU is used - NVIDIA, AMD or Intel, integrated
+  graphics included. The Vulkan loader ships with the GPU driver; there is no
+  CUDA or other runtime to install. A discrete card is preferred over
+  integrated graphics.
+- **No GPU.** Dictation falls back to Parakeet TDT v3 on the CPU (396 MB,
+  downloaded only on machines that need it): much faster than Whisper on a CPU,
+  but limited to 25 European languages. Meetings always use Whisper, on the CPU
+  if necessary.
+- **Other models.** Put another `ggml` Whisper file into the models folder and
+  select it in the tray settings.
+
+### If something breaks
+
+The engines are windowed (no console), so they log to files. Send these when
+reporting a problem:
+
+- Dictation: `%USERPROFILE%\.config\voice-at\laris-engine.log` - startup
+  output, the chosen GPU and model, and any crash traceback.
+- Meetings: `recorder.log` inside the session folder under
+  `%USERPROFILE%\.miris\sessions\`.
+
+---
+
+## Unsigned builds
+
+VOXIS is **not code-signed** (that needs a paid developer certificate). The app
+is safe; Windows just cannot verify the publisher. On first launch SmartScreen
+shows "Windows protected your PC / unknown publisher" - click **More info >
+Run anyway**.
+
+---
+
+## Uninstall / reset
+
+- Uninstall **VOXIS** from **Settings > Apps > Installed apps**.
+- State and config: `~/.config/voice-at/` (settings, orb theme, downloaded
+  models, logs), `~/.miris/` (meeting config and recordings), and any notes
+  already written into your vault.
+
+---
+
+## macOS (from source)
+
+Inherited from upstream and not maintained in this fork. For current
+instructions and macOS releases, use
+[sammyjdev/voxis](https://github.com/sammyjdev/voxis).
+
+### Prerequisites
 
 - macOS 14.2 or newer (Core Audio process tap), Apple Silicon
 - Python 3.11 (`python3.11 --version`)
 - Xcode Command Line Tools for the audio helper: `xcode-select --install`
 - Node.js 20+ and Rust stable if you want to build the tray from source
-- An LLM CLI for meeting summaries. Default is the
-  [Antigravity CLI](https://antigravity.google) (`agy`) logged in; any
-  prompt-in / text-out CLI works - set it in `~/.miris/config.toml`.
+- An LLM CLI for meeting summaries (default `agy`, see above)
 
 ```bash
 git clone https://github.com/sammyjdev/voxis.git ~/code/voxis
 cd ~/code/voxis
 ```
 
----
-
-## 1. LARIS - dictation engine
+### LARIS - dictation engine
 
 ```bash
 cd ~/code/voxis/packages/laris
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-Run it (hold Right-Cmd to talk, double-tap for hands-free):
-
-```bash
-python -m laris
+python -m laris          # hold Right-Cmd to talk, double-tap for hands-free
 ```
 
 First launch, macOS will prompt for **Accessibility** / **Input Monitoring**
 (the global hotkey) and **Microphone**. Grant both.
 
-Orb themes live in `~/.config/voice-at/orb-theme.json` and can be changed live
-via the tray or the `/theme` endpoint - see `packages/laris/README.md`.
-
----
-
-## 2. MIRIS - meeting recorder
+### MIRIS - meeting recorder
 
 MIRIS reuses LARIS for transcription, so install it into the MIRIS venv too.
 
@@ -65,21 +150,9 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt -r ../laris/requirements.txt
 make -C helper                       # builds helper/audiotap (needs swiftc)
-```
-
-Put the CLI on your PATH (optional but recommended):
-
-```bash
 ln -sf "$PWD/.venv/bin/miris" ~/.local/bin/miris
+miris doctor                         # triggers the System Audio Recording prompt
 ```
-
-Verify - this also triggers the **System Audio Recording** permission prompt:
-
-```bash
-miris doctor
-```
-
-Use it:
 
 ```bash
 miris start     # begin recording (detached; survives closing the terminal)
@@ -87,30 +160,7 @@ miris status
 miris stop      # stop, transcribe, summarize, save the note to your vault
 ```
 
-Config is created on first run at `~/.miris/config.toml` - vault root,
-category-to-folder map, and `llm_command`. Raw recordings stay under
-`~/.miris/sessions/<timestamp>/` until you delete them; they are created
-`0600` (owner-only).
-
-Tip: use a headset. Without one the mic also picks up the speakers, so your
-channel echoes the other side.
-
----
-
-## 3. VOXIS Tray (optional)
-
-### From a release (recommended)
-
-Download the installer for your OS from the
-[Releases page](https://github.com/sammyjdev/voxis/releases):
-
-| OS | File |
-|----|------|
-| macOS | `VOXIS_<version>_aarch64.dmg` |
-| Windows | `VOXIS_<version>_x64-setup.exe` / `.msi` |
-| Linux | `.deb` or `.AppImage` |
-
-### From source
+### VOXIS Tray
 
 ```bash
 cd ~/code/voxis/apps/tray
@@ -118,72 +168,13 @@ npm install
 npm run tauri build        # bundle lands in src-tauri/target/release/bundle/
 ```
 
-The tray drives the engines through their existing interfaces (the `miris`
-CLI, the LARIS overlay server, config files). It reads the absolute paths of
-the engines from `~/.config/voice-at/tray.json`; the defaults assume
-`~/code/voxis` and `~/.local/bin/miris`, so adjust that file if you cloned
-elsewhere.
+The tray reads the absolute paths of the engines from
+`~/.config/voice-at/tray.json`; the defaults assume `~/code/voxis` and
+`~/.local/bin/miris`, so adjust that file if you cloned elsewhere.
 
----
+Gatekeeper blocks unsigned apps ("damaged" or "cannot be verified"). Clear the
+quarantine flag once after moving VOXIS to Applications:
 
-## Windows: dictation
-
-Windows gets dictation through a single installer - no Python, no venv, no
-source clone.
-
-1. **Install.** Download `VOXIS_<version>_x64-setup.exe` (or `.msi`) from the
-   [Releases page](https://github.com/sammyjdev/voxis/releases) and run it.
-   SmartScreen will warn (unsigned) - "More info" > "Run anyway".
-2. **Grant the microphone.** Windows has no accessibility prompt like macOS;
-   enable it under **Settings > Privacy & security > Microphone** (allow
-   desktop apps).
-3. **Dictate.** Hold the activation key (**Right-Shift** by default), speak,
-   release - the text lands in the focused app. Change the key in the tray
-   settings window.
-
-**First run downloads the speech model.** The engine uses `faster-whisper`
-(`small` model by default, a few hundred MB) fetched from HuggingFace on first
-dictation, so the first use needs internet and takes a moment. After that it
-runs fully offline. You can change the model size (`small`, `base`, `medium`) in
-the tray settings.
-
-**CPU-only (int8 quantization).** The bundled engine runs on **CPU** (int8 
-quantization) on any machine - the guaranteed baseline, no GPU required. An 
-NVIDIA GPU is **not** used automatically in this build; CUDA acceleration is a 
-manual upgrade (install the CUDA CTranslate2 runtime), not required and not 
-bundled.
-
-**If something breaks.** The engine is windowed (no console), so it logs to
-`%USERPROFILE%\.config\voice-at\laris-engine.log`. Send that file when
-reporting a problem - it holds the startup output and any crash traceback.
-
----
-
-## Unsigned builds
-
-VOXIS is **not code-signed or notarized** (that needs paid Apple/Windows
-developer certificates). The app is safe; the OS just cannot verify the
-publisher. First launch:
-
-- **macOS**: Gatekeeper blocks it ("damaged" or "cannot be verified"). After
-  moving VOXIS to Applications, clear the quarantine flag once:
-
-  ```bash
-  xattr -cr /Applications/VOXIS.app
-  ```
-
-  On macOS 15 (Sequoia) and newer, right-click > Open is no longer enough -
-  use the `xattr` command, or go to System Settings > Privacy & Security >
-  "Open Anyway".
-- **Windows**: SmartScreen shows "Windows protected your PC / unknown
-  publisher" - click "More info" > "Run anyway".
-- **Linux**: `.deb` / AppImage are unaffected.
-
----
-
-## Uninstall / reset
-
-- Tray: delete `/Applications/VOXIS.app` (macOS) or uninstall the package.
-- Engines: remove the `.venv` folders and the `~/.local/bin/miris` symlink.
-- State and config: `~/.config/voice-at/`, `~/.miris/`, and any notes already
-  written into your vault.
+```bash
+xattr -cr /Applications/VOXIS.app
+```
