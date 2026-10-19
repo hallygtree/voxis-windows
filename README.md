@@ -10,8 +10,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hallygtree/voxis-windows/actions/workflows/tray-build.yml"><img src="https://github.com/hallygtree/voxis-windows/actions/workflows/tray-build.yml/badge.svg" alt="Tray build status"></a>
-  <a href="https://github.com/hallygtree/voxis-windows/actions/workflows/security-audit.yml"><img src="https://github.com/hallygtree/voxis-windows/actions/workflows/security-audit.yml/badge.svg" alt="Security audit status"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D6" alt="Platform: Windows x64">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
 </p>
