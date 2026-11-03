@@ -20,6 +20,19 @@ _DETACHED = ({"creationflags": 0x00000200 | 0x00000008}  # NEW_PROCESS_GROUP | D
              if sys.platform == "win32" else {})
 
 
+def _probe_pid(pid: int) -> None:
+    """Raise ProcessLookupError unless pid is a running process. Windows has no
+    signal 0: os.kill(pid, 0) there sends CTRL_C_EVENT to the console group,
+    which interrupts whatever shares the console - a test run included."""
+    if sys.platform == "win32":
+        import psutil
+
+        if not psutil.pid_exists(pid):
+            raise ProcessLookupError(pid)
+        return
+    os.kill(pid, 0)
+
+
 def _live_session(cfg: config.Config):
     """Newest session with a live recorder pid, or (None, None). Stale pidfiles
     (process gone) are removed on the way."""
@@ -31,8 +44,8 @@ def _live_session(cfg: config.Config):
             continue
         try:
             pid = int(pid_file.read_text())
-            os.kill(pid, 0)
-        except (ValueError, OSError):  # Windows raises a bare OSError for a dead pid
+            _probe_pid(pid)
+        except (ValueError, ProcessLookupError, PermissionError):
             pid_file.unlink(missing_ok=True)  # corrupt or stale
             continue
         return session_dir, pid

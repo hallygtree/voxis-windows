@@ -71,7 +71,19 @@ def test_load_wav_resamples_without_torch(tmp_path, monkeypatch):
     assert len(transcribe.load_wav_mono16k(tmp_path / "c.wav")) == 16000
 
 
-def test_load_wav_rejects_a_rate_below_16k_with_a_clear_message(tmp_path):
+def test_load_wav_rejects_a_rate_below_16k_with_a_clear_message(tmp_path, monkeypatch):
+    """The torch-free resampler only goes down; torchaudio, where installed,
+    upsamples instead, so torch is made unimportable here."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_torch(name, *args, **kwargs):
+        if name.split(".")[0] in {"torch", "torchaudio"}:
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_torch)
     _write_wav(tmp_path / "slow.wav", np.zeros(8000, dtype=np.float32), 8000)
     with pytest.raises(ValueError, match="cannot upsample"):
         transcribe.load_wav_mono16k(tmp_path / "slow.wav")

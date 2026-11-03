@@ -85,3 +85,19 @@ def test_the_frozen_entry_runs_children_from_the_same_command_line(monkeypatch, 
     # module reads the session from argv[1], as under `python -m`
     assert ran["module"] == "miris.recorder"
     assert ran["argv"][1:] == [str(tmp_path)]
+
+
+def test_the_live_session_probe_never_signals_on_windows(monkeypatch):
+    """os.kill(pid, 0) is CTRL_C_EVENT on Windows; the probe must not call it."""
+    import os
+
+    import pytest
+
+    from miris import cli
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(os, "kill", lambda *a: pytest.fail("os.kill must not run"))
+
+    cli._probe_pid(os.getpid())  # alive: returns
+    with pytest.raises(ProcessLookupError):
+        cli._probe_pid(2**22 + 7)  # no such pid
