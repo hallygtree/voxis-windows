@@ -22,8 +22,21 @@ def _has_soundcard() -> bool:
         return False
 
 
+def _has_playback_device() -> bool:
+    """A default speaker to tap. CI runners have none: soundcard then raises
+    (0x80070490, element not found) instead of returning None."""
+    if not (_has_soundcard() and sys.platform == "win32"):
+        return False
+    try:
+        import soundcard as sc
+
+        return sc.default_speaker() is not None
+    except Exception:  # noqa: BLE001 - any failure means "no device here"
+        return False
+
+
 needs_device = pytest.mark.skipif(
-    not (_has_soundcard() and sys.platform == "win32"),
+    not _has_playback_device(),
     reason="needs a real WASAPI loopback device",
 )
 

@@ -90,11 +90,16 @@ def test_the_frozen_entry_runs_children_from_the_same_command_line(monkeypatch, 
 def test_the_live_session_probe_never_signals_on_windows(monkeypatch):
     """os.kill(pid, 0) is CTRL_C_EVENT on Windows; the probe must not call it."""
     import os
+    import types
 
     import pytest
 
     from miris import cli
 
+    # psutil ships in the Windows bundle only; fake it so this runs anywhere
+    alive = {os.getpid()}
+    fake_psutil = types.SimpleNamespace(pid_exists=lambda pid: pid in alive)
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(os, "kill", lambda *a: pytest.fail("os.kill must not run"))
 
