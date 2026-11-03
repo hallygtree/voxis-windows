@@ -152,12 +152,14 @@ class WhisperCppTranscriber:
                    language: str | None = None) -> str:
         """language overrides the server's boot-time language for this one
         request (miris pins a meeting channel's detected language this way);
-        None keeps it. Parakeet detects on its own and ignores it."""
+        None keeps it. INITIAL_PROMPT is read per call, so miris clearing it
+        for meetings takes effect. Parakeet ignores both."""
         if len(audio) == 0:
             return ""
         if self.backend == "whisper" and self._server is not None:
             return str(self._server.infer(_wav_bytes(audio, sample_rate), False,
-                                          language=language)
+                                          language=language,
+                                          prompt=config.INITIAL_PROMPT)
                        .get("text", "")).strip()
         if self.backend == "parakeet" and self._parakeet_model is not None:
             # strip here too, not only in the runtime helper: this text is typed

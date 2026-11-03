@@ -132,7 +132,12 @@ def test_repeated_device_failures_give_up_instead_of_spinning(tmp_path, monkeypa
                         lambda *a, **k: rec)
 
     tap = WindowsLoopbackTap(tmp_path / "system.wav")
-    tap.start()
+    try:
+        tap.start()
+    except RuntimeError:
+        # the ten failures can all land before start() looks: it then raises,
+        # which is the dead-device report the recorder wants
+        pass
     _wait_until(lambda: tap.error is not None)
     tap.stop()
 

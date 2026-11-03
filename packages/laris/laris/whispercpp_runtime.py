@@ -437,10 +437,13 @@ class WhisperServer:
                 time.sleep(0.25)
         raise TimeoutError("whisper-server did not start listening")
 
-    def infer(self, wav: bytes, verbose: bool, language: str | None = None) -> dict:
+    def infer(self, wav: bytes, verbose: bool, language: str | None = None,
+              prompt: str = "") -> dict:
         fields = {"response_format": "verbose_json" if verbose else "json"}
         if language:
             fields["language"] = language  # per request; the -l flag is the default
+        if prompt:
+            fields["prompt"] = prompt  # primes the decoder, like Whisper's initial_prompt
         body, content_type = _multipart(fields, "file", "audio.wav", wav)
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/inference", data=body, method="POST",

@@ -46,7 +46,7 @@ class FakeServer:
     def start(self):
         self.started = True
 
-    def infer(self, wav, verbose, language=None):
+    def infer(self, wav, verbose, language=None, prompt=""):
         return self.payload
 
     def stop(self):
@@ -166,7 +166,7 @@ def test_warm_never_raises(monkeypatch):
     import laris.stt_whispercpp as mod
 
     class ExplodingInfer(FakeServer):
-        def infer(self, wav, verbose, language=None):
+        def infer(self, wav, verbose, language=None, prompt=""):
             raise RuntimeError("gpu hung")
 
     monkeypatch.setattr(runtime, "WhisperServer", ExplodingInfer)
@@ -359,3 +359,39 @@ def test_parakeet_path_shells_out_and_cleans_up(monkeypatch, tmp_path):
     assert t.transcribe(np.zeros(16000, dtype=np.float32)) == "texto"
     assert seen["exists"] is True          # the file existed during the call
     assert "parakeet" in str(seen["model"])
+
+
+# the real class, taken at import: the autouse fixture swaps in FakeServer
+from laris.whispercpp_runtime import WhisperServer as _RealWhisperServer  # noqa: E402
+
+
+def test_infer_sends_language_and_prompt_only_when_set(monkeypatch):
+    """whisper-server reads both per request; an empty value must not be
+    sent, or it would override the server's -l default with nothing."""
+    from laris import whispercpp_runtime as wr
+
+    sent = []
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"text": "ok"}'
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req.data)
+        return _Resp()
+
+    monkeypatch.setattr(wr.urllib.request, "urlopen", fake_urlopen)
+    server = _RealWhisperServer.__new__(_RealWhisperServer)
+    server.port = 1
+
+    server.infer(b"RIFF", False)
+    server.infer(b"RIFF", False, language="en", prompt="VOXIS, Laris")
+
+    assert b'name="language"' not in sent[0] and b'name="prompt"' not in sent[0]
+    assert b'name="language"' in sent[1] and b"VOXIS, Laris" in sent[1]
