@@ -31,8 +31,13 @@ def load_wav_mono16k(path: Path) -> np.ndarray:
         audio = audio[: len(audio) - len(audio) % n_ch]  # tolerate truncated WAVs
         audio = audio.reshape(-1, n_ch).mean(axis=1)
     if sr != TARGET_SR:
-        import torch
-        import torchaudio.functional as F
+        try:
+            import torch
+            import torchaudio.functional as F
+        except ImportError:
+            # torch-free installs (the Windows bundle)
+            from miris.audio import resample_to_16k
+            return resample_to_16k(audio, sr)
 
         audio = F.resample(torch.from_numpy(audio), sr, TARGET_SR).numpy()
     return audio
@@ -40,8 +45,13 @@ def load_wav_mono16k(path: Path) -> np.ndarray:
 
 def speech_spans(audio: np.ndarray, sr: int = TARGET_SR) -> list[tuple[int, int]]:
     """Silero VAD over the whole file -> utterance-sized (start, end) sample spans."""
-    import torch
-    from silero_vad import get_speech_timestamps, load_silero_vad
+    try:
+        import torch
+        from silero_vad import get_speech_timestamps, load_silero_vad
+    except ImportError:
+        # torch-free installs (the Windows bundle): the same weights over onnxruntime
+        from laris.vad_onnx import speech_spans as onnx_speech_spans
+        return onnx_speech_spans(audio, sr)
 
     model = load_silero_vad()
     stamps = get_speech_timestamps(torch.from_numpy(audio), model, sampling_rate=sr)

@@ -44,12 +44,63 @@ fn agent() -> ureq::Agent {
         .new_agent()
 }
 
-pub fn get_theme(peer: &LarisPeer) -> Result<serde_json::Value, String> {
-    let mut res = agent()
-        .get(format!("{}/theme?token={}", peer.url, peer.token))
+/// `screen` is the logical work area (w, h) of a tray that places the orb
+/// window itself (Windows): the daemon then adds the orb's rect to the reply.
+pub fn get_theme(peer: &LarisPeer, screen: Option<(f64, f64)>) -> Result<serde_json::Value, String> {
+    let mut url = format!("{}/theme?token={}", peer.url, peer.token);
+    if let Some((w, h)) = screen.filter(|(w, h)| *w > 0.0 && *h > 0.0) {
+        url.push_str(&format!("&screen_w={w}&screen_h={h}"));
+    }
+    let mut res = agent().get(url).call().map_err(|e| e.to_string())?;
+    res.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+/// The part of the daemon's orb state the Windows tray uses: visibility, a
+/// serial that changes with it, and boot progress. Readiness comes from
+/// /theme like on every platform; the other fields are ignored.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OverlayState {
+    pub visible: bool,
+    pub serial: i64,
+    /// Human-readable boot progress ("baixando modelo 43%"), shown while
+    /// `ready` is false. Defaulted so an engine that never sends it parses.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// 0.0-1.0 when the phase has a measurable fraction; a number rather than
+    /// parsed back out of `status`, which is localized text.
+    #[serde(default)]
+    pub progress: Option<f64>,
+}
+
+/// Long-polls /overlay/state: answers at once when the serial differs from
+/// `since`, otherwise holds up to `wait` seconds for a change. Its agent's
+/// timeout must outlast `wait`.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn get_overlay_state(peer: &LarisPeer, since: i64, wait: f64) -> Result<OverlayState, String> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs_f64(wait + 10.0)))
+        .proxy(None)
+        .build()
+        .new_agent();
+    let mut res = agent
+        .get(format!(
+            "{}/overlay/state?token={}&since={since}&wait={wait}",
+            peer.url, peer.token
+        ))
         .call()
         .map_err(|e| e.to_string())?;
     res.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+/// Applies ASSISTANT_MODE to the running daemon. Restarting it instead tore
+/// down the orb and reloaded the model, which reads as the app crashing.
+pub fn set_mode(peer: &LarisPeer, mode: &str) -> Result<(), String> {
+    agent()
+        .post(format!("{}/mode?token={}", peer.url, peer.token))
+        .send_json(&serde_json::json!({ "mode": mode }))
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn set_theme(
@@ -63,9 +114,16 @@ pub fn set_theme(
     res.body_mut().read_json().map_err(|e| e.to_string())
 }
 
+/// The dev venv's interpreter, relative to laris_dir.
+#[cfg(not(windows))]
+const VENV_PYTHON: &str = ".venv/bin/python";
+#[cfg(windows)]
+const VENV_PYTHON: &str = ".venv/Scripts/python.exe";
+
 pub struct LarisDaemon {
     child: Option<Child>,
     laris_dir: PathBuf,
+    engine_bin: Option<PathBuf>, // frozen engine (Windows installer); None = dev venv
     log_path: Option<PathBuf>,   // where the daemon's stdout/stderr are captured
 }
 
@@ -78,7 +136,21 @@ impl LarisDaemon {
         Self {
             child: None,
             laris_dir,
+            engine_bin: None,
             log_path,
+        }
+    }
+
+    /// Run the frozen engine the Windows installer ships. It is windowed (no
+    /// console), so its stdout/stderr - tracebacks and native-lib errors
+    /// included - only exist in log_path.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn with_engine(engine_bin: PathBuf, log_path: PathBuf) -> Self {
+        Self {
+            child: None,
+            laris_dir: engine_bin.parent().map(Path::to_path_buf).unwrap_or_default(),
+            engine_bin: Some(engine_bin),
+            log_path: Some(log_path),
         }
     }
 
@@ -96,12 +168,18 @@ impl LarisDaemon {
         if self.owns_running() {
             return Ok(()); // don't orphan a live child by overwriting its handle
         }
-        let python = self.laris_dir.join(".venv/bin/python");
-        let mut cmd = Command::new(&python);
-        // -u: stdout goes to a file below, and Python block-buffers a
-        // non-tty stdout - the [Voice] prints would sit in the buffer
-        // instead of reaching the log this exists to produce.
-        cmd.args(["-u", "-m", "laris"]).current_dir(&self.laris_dir);
+        let program = match &self.engine_bin {
+            Some(bin) => bin.clone(),
+            None => self.laris_dir.join(VENV_PYTHON),
+        };
+        let mut cmd = Command::new(&program);
+        if self.engine_bin.is_none() {
+            // -u: stdout goes to a file below, and Python block-buffers a
+            // non-tty stdout - the [Voice] prints would sit in the buffer
+            // instead of reaching the log this exists to produce.
+            cmd.args(["-u", "-m", "laris"]);
+        }
+        cmd.current_dir(&self.laris_dir);
         // Only "Sair" ever signalled the daemon, so a Force Quit, a crash or a
         // logout left it running with no tray to stop it. The daemon watches
         // this pid and exits when it goes; a daemon started by hand never sees
@@ -110,7 +188,7 @@ impl LarisDaemon {
         self.redirect_log(&mut cmd);
         let child = cmd
             .spawn()
-            .map_err(|e| format!("{}: {e}", python.display()))?;
+            .map_err(|e| format!("{}: {e}", program.display()))?;
         self.child = Some(child);
         Ok(())
     }
@@ -132,21 +210,28 @@ impl LarisDaemon {
         }
     }
 
-    /// SIGTERM first (laris tears down overlay + keyboard listener), SIGKILL
-    /// after 3s if it hangs.
+    /// Unix: SIGTERM first (laris tears down overlay + keyboard listener),
+    /// SIGKILL after 3s if it hangs.
+    ///
+    /// Windows: TerminateProcess right away. There is no SIGTERM to wait on,
+    /// and the engine has nothing to flush - peers.json is written at boot and
+    /// a stale entry reads as offline - so the 3s grace would only freeze the
+    /// tray on every quit and settings save.
     pub fn stop(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
         };
         #[cfg(unix)]
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
-        }
-        for _ in 0..30 {
-            if let Ok(Some(_)) = child.try_wait() {
-                return;
+        {
+            unsafe {
+                libc::kill(child.id() as i32, libc::SIGTERM);
             }
-            std::thread::sleep(Duration::from_millis(100));
+            for _ in 0..30 {
+                if let Ok(Some(_)) = child.try_wait() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
         let _ = child.kill();
         let _ = child.wait();
@@ -172,6 +257,21 @@ mod tests {
             let launcher = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake-python");
             std::os::unix::fs::symlink(launcher, py).unwrap();
         }
+    }
+
+    #[test]
+    fn overlay_state_parses_what_the_daemon_sends() {
+        let full = r#"{"visible": true, "ready": false, "mode": "dictate", "serial": 42,
+                       "status": "baixando modelo", "progress": 0.43}"#;
+        let state: OverlayState = serde_json::from_str(full).unwrap();
+        assert!(state.visible);
+        assert_eq!(state.serial, 42);
+        assert_eq!(state.status.as_deref(), Some("baixando modelo"));
+        assert_eq!(state.progress, Some(0.43));
+
+        // status and progress are optional
+        let bare: OverlayState = serde_json::from_str(r#"{"visible": false, "serial": 1}"#).unwrap();
+        assert_eq!((bare.status, bare.progress), (None, None));
     }
 
     #[test]

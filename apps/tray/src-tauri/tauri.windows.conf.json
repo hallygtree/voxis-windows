@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "engine/": "engine/",
+      "engine-miris/": "engine-miris/"
+    }
+  }
+}

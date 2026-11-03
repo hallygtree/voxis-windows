@@ -153,6 +153,8 @@ def run(
     overlay_url: str = "",
     on_ready: Callable[[], None] | None = None,
     trigger=None,
+    orb_state=None,
+    mode_state=None,
 ) -> None:
     """Runs the PTT voice loop on the calling thread - callers run this on a
     background daemon thread (see claude-code-ops's backend/main.py).
@@ -160,19 +162,41 @@ def run(
     trigger: anything with `pressed`/`hands_free` events, `start()`, and
     `label`/`stop_hint` strings for the log. Defaults to the PushToTalk key
     listener; Linux passes a ToggleTrigger, since Wayland gives the process
-    no global key events."""
+    no global key events.
+
+    orb_state: an OrbStateManager the server exposes over /overlay/state, for
+    a tray that draws the orb in its own window (Windows). mode_state: the live
+    ASSISTANT_MODE, flipped over POST /mode without restarting the daemon."""
     from laris.platform import get_backend
 
     if voice_queue is None:
         import queue
         voice_queue = queue.Queue()
 
+    if mode_state is None:
+        from laris.runtime_mode import ModeState
+        mode_state = ModeState(config.MODE)
+
     backend = get_backend()
-    backend.warm()
+    # A backend whose model load takes long enough to matter (Windows: a
+    # whisper.cpp server, maybe a first-run download) opts into warming on a
+    # background thread, so the key below is live at once and a press during
+    # boot records normally while only the transcription waits. The others
+    # warm here, on the thread that will transcribe: mlx ties its GPU streams
+    # to the thread that created them.
+    warm_in_background = getattr(backend, "warms_in_background", False)
+    if not warm_in_background:
+        backend.warm()
     stt = backend
     type_text = backend.type_text
     voice_session = make_voice_session()
     assistant = make_assistant()
+    # Windows draws the orb in a tray window that reads orb_state over HTTP,
+    # and publishes boot progress to it; backends that draw their own orb
+    # have no such hook.
+    attach = getattr(backend, "attach_orb_state", None)
+    if attach is not None and orb_state is not None:
+        attach(orb_state)
     overlay = backend.make_overlay(overlay_url)
     ducker = backend.make_ducker()
     if trigger is None:
@@ -181,25 +205,58 @@ def run(
         trigger_label = f"PTT: {config.DICTATE_KEY}"
         stop_hint = "tap the dictate key to stop"
         mode = f", modo: {config.MODE}"
+        # the double-tap is the only way into hands-free, and ASSISTANT_MODE
+        # decides whether it is honoured
+        gesture_gated = True
     else:
         trigger_label, stop_hint = trigger.label, trigger.stop_hint
         # no key to hold: "ptt" would name a mode this trigger does not have
         mode = "" if config.MODE == "ptt" else f", modo: {config.MODE}"
+        # a toggle trigger has no push-to-talk to fall back on: its toggle is
+        # the user's explicit request for hands-free, whatever the mode says
+        gesture_gated = False
     ptt = trigger
     ptt.start()
-    # only now is dictation real: the model is loaded and the key listener is
-    # attached. The tray polls this to stop claiming "Ditado" during the ~3.6s
-    # it takes to get here.
-    if on_ready is not None:
-        on_ready()
+
+    def _report_ready():
+        # Backends that can fail every rung of their chain say so, and the tray
+        # must not advertise dictation that will silently return "" forever.
+        usable = getattr(backend, "stt_usable", None)
+        if usable is not None and not usable():
+            print("[Voice] transcricao indisponivel - o tray nao vai marcar pronto")
+            if orb_state is not None:
+                # The label is the only place a user sees this; leaving it on
+                # the last progress step would read as "still loading" forever.
+                orb_state.set_status("transcricao indisponivel")
+            return
+        if orb_state is not None:
+            # ready first: the label only shows status while not ready, so this
+            # order gives one visible transition instead of two.
+            orb_state.set_ready(True)
+            orb_state.set_status(None)
+        # only now is dictation real: the model is loaded and the key listener
+        # is attached. The tray polls this to stop claiming "Ditado" during the
+        # seconds it takes to get here.
+        if on_ready is not None:
+            on_ready()
+
+    if warm_in_background:
+        def _warm_backend():
+            started = time.monotonic()
+            backend.warm()
+            print(f"[Voice] modelo pronto em {time.monotonic() - started:.1f}s")
+            _report_ready()
+
+        threading.Thread(target=_warm_backend, name="laris-warm", daemon=True).start()
+    else:
+        _report_ready()
     vad = None
-    # ASSISTANT_MODE=always_on is the tray's "Hands-free" checkbox. Arm the
-    # in-loop flag rather than calling run_always_on(): that path builds
-    # VadCapture() eagerly, and a missing silero-vad would SystemExit the whole
-    # daemon at boot - plain dictation included. Armed here it degrades to PTT
-    # through the loop's VAD-unavailable guard instead.
-    if config.MODE == "always_on":
-        ptt.hands_free.set()
+    vad_unavailable = False
+    # ASSISTANT_MODE=always_on (the tray "Hands-free" checkbox) permits the
+    # double-tap; it does not start a session. Booting straight into hands-free
+    # would mean the machine starts listening and typing into whatever happens
+    # to be focused the moment the app comes up. The double-tap is the intent
+    # signal.
     kiris = "com Kiris (assistente)" if assistant else "pura (VOICE_ASSISTANT=0, muda)"
     print(
         f"[Voice] Laris (transcritora) pronta, {kiris} - "
@@ -213,19 +270,36 @@ def run(
             voice_queue.put(VoiceEvent(phase=PHASE_IDLE, amplitude=0.0))
 
     while True:
-        kind, pressed = _wait_for_ptt(ptt.pressed, hands_free=ptt.hands_free, on_tick=_reset_orb_if_stale)
+        # Read the mode every pass, not once at boot: the tray flips it over
+        # HTTP (POST /mode) and used to have to restart the whole engine.
+        if not gesture_gated or mode_state.hands_free_allowed:
+            hands_free_gesture = ptt.hands_free
+        else:
+            # A double-tap landing while hands-free is off must not queue a
+            # session that fires the moment it is switched on - that is the
+            # "starts listening on its own" hazard the gesture exists to avoid.
+            ptt.hands_free.clear()
+            hands_free_gesture = None
+        kind, pressed = _wait_for_ptt(ptt.pressed, hands_free=hands_free_gesture, on_tick=_reset_orb_if_stale)
         if kind == "hands_free":
-            if vad is None:
-                from laris import audio_capture
+            # Constructed on first use, and still guarded: a VAD that cannot
+            # load must not take the daemon down with it, because that would
+            # kill plain dictation too. SystemExit is spelled out because the
+            # torch path raises it rather than a plain Exception.
+            if vad is None and not vad_unavailable:
                 try:
-                    vad = audio_capture.VadCapture()
-                except SystemExit as exc:
-                    # this is the VAD-unavailable guard the boot-time arming
-                    # above counts on: without silero-vad, disarm hands-free
-                    # and keep serving plain PTT instead of killing the daemon
-                    print(f"[Voice] {exc} - hands-free off, PTT still works")
-                    pressed.clear()
-                    continue
+                    from laris.audio_capture import VadCapture
+                    vad = VadCapture()
+                except (Exception, SystemExit) as exc:  # noqa: BLE001
+                    vad_unavailable = True
+                    print(
+                        f"[Voice] hands-free unavailable ({exc}); "
+                        "push-to-talk keeps working. Hold the key to dictate."
+                    )
+            if vad is None:
+                # clear it, or _wait_for_ptt hands it straight back and spins
+                ptt.hands_free.clear()
+                continue
             _run_hands_free_session(vad, stt, type_text, overlay, voice_queue, pressed, ducker=ducker,
                                     stop_hint=stop_hint)
             continue

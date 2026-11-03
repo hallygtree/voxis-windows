@@ -49,7 +49,10 @@ class SystemTap:
 
 def default_tap_factory(out_wav: Path) -> SystemTap:
     """The system-audio tap for this platform: pw-record on Linux, the
-    audiotap helper on macOS."""
+    audiotap helper on macOS, WASAPI loopback in-process on Windows."""
+    if sys.platform == "win32":
+        from miris.systemtap_windows import WindowsLoopbackTap
+        return WindowsLoopbackTap(out_wav)
     if sys.platform.startswith("linux"):
         from miris.systemtap_linux import PwRecordTap
         return PwRecordTap(out_wav)

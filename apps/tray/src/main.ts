@@ -15,6 +15,7 @@ type Settings = {
   } | null;
   laris_alive: boolean;
   version: string;
+  platform: string; // std::env::consts::OS: "windows" | "macos" | "linux"
 };
 
 // mirrors laris/hotkey.py _ALLOWED (ctrl/alt are broken as global hotkeys on macOS)
@@ -25,6 +26,13 @@ const DICTATE_KEYS = [
 
 const $ = <T extends HTMLElement>(sel: string) =>
   document.querySelector(sel) as T;
+
+// Set from the backend's std::env::consts::OS on load(). Not sniffed from
+// navigator.userAgent: a wrong answer here is silent (the user saves a
+// DICTATE_KEY that never fires, or an STT key the engine never reads), so it
+// comes from the process that actually spawns the engine. bind()'s handlers
+// only run after load() resolved.
+let isWindows = false;
 
 function feedback(msg: string, isError = false) {
   const el = $<HTMLParagraphElement>("#feedback");
@@ -47,19 +55,36 @@ function categoryRow(name = "", folder = ""): HTMLTableRowElement {
 
 async function load() {
   const s = await invoke<Settings>("get_settings");
+  isWindows = s.platform === "windows";
 
   const keySelect = $<HTMLSelectElement>("#dictate-key");
   keySelect.innerHTML = DICTATE_KEYS
     .map((k) => `<option value="${k}">${k}</option>`)
     .join("");
   // an unknown stored value would leave the select unselected and submit ""
+  // must match laris/config.py::_DEFAULT_DICTATE_KEY - cmd_r does not exist
+  // on Windows, so a cmd_r default there is a hotkey that never fires
+  const defaultKey = isWindows ? "shift_r" : "cmd_r";
   keySelect.value = DICTATE_KEYS.includes(s.laris.DICTATE_KEY ?? "")
     ? s.laris.DICTATE_KEY
-    : "cmd_r";
+    : defaultKey;
   $<HTMLInputElement>("#hands-free").checked =
     s.laris.ASSISTANT_MODE === "always_on";
-  $<HTMLInputElement>("#stt-model").value =
-    s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
+  // Windows runs whisper.cpp (ggml file names, STT_MODEL_GGML); macOS runs mlx
+  // (repo ids, STT_MODEL). The field is free text on purpose - another ggml
+  // file in the models dir is valid too - so the placeholder is the only hint
+  // the user gets that the two are not interchangeable.
+  const model = $<HTMLInputElement>("#stt-model");
+  if (isWindows) {
+    model.value = s.laris.STT_MODEL_GGML ?? "ggml-large-v3-turbo-q5_0.bin";
+    model.placeholder = "ggml-large-v3-turbo-q5_0.bin";
+    model.title =
+      "whisper.cpp ggml model file in ~/.config/voice-at/models (or an absolute path)";
+  } else {
+    model.value = s.laris.STT_MODEL ?? "mlx-community/whisper-large-v3-turbo-q4";
+    model.placeholder = "mlx-community/whisper-large-v3-turbo-q4";
+    model.title = "mlx-whisper model id";
+  }
   $<HTMLSelectElement>("#noise").value = s.laris.NOISE_REDUCTION ?? "on";
   $<HTMLTextAreaElement>("#initial-prompt").value = s.laris.INITIAL_PROMPT ?? "";
 
@@ -93,16 +118,23 @@ function bind() {
 
   $<HTMLButtonElement>("#save-laris").onclick = async () => {
     try {
+      const updates: Record<string, string> = {
+        DICTATE_KEY: $<HTMLSelectElement>("#dictate-key").value,
+        ASSISTANT_MODE: $<HTMLInputElement>("#hands-free").checked
+          ? "always_on"
+          : "ptt",
+        NOISE_REDUCTION: $<HTMLSelectElement>("#noise").value,
+        INITIAL_PROMPT: $<HTMLTextAreaElement>("#initial-prompt").value.trim(),
+      };
+      // On Windows, persist STT_MODEL_GGML; on macOS, persist STT_MODEL
+      const modelValue = $<HTMLInputElement>("#stt-model").value.trim();
+      if (isWindows) {
+        updates.STT_MODEL_GGML = modelValue;
+      } else {
+        updates.STT_MODEL = modelValue;
+      }
       await invoke("save_laris_settings", {
-        updates: {
-          DICTATE_KEY: $<HTMLSelectElement>("#dictate-key").value,
-          ASSISTANT_MODE: $<HTMLInputElement>("#hands-free").checked
-            ? "always_on"
-            : "ptt",
-          STT_MODEL: $<HTMLInputElement>("#stt-model").value.trim(),
-          NOISE_REDUCTION: $<HTMLSelectElement>("#noise").value,
-          INITIAL_PROMPT: $<HTMLTextAreaElement>("#initial-prompt").value.trim(),
-        },
+        updates,
       });
       feedback("Ditado salvo.");
     } catch (e) {
@@ -153,4 +185,9 @@ function bind() {
   };
 }
 
-load().then(bind).catch((e) => feedback(String(e), true));
+load()
+  .then(bind)
+  .catch((e) => feedback(String(e), true))
+  .finally(() => {
+    document.documentElement.classList.remove("loading");
+  });

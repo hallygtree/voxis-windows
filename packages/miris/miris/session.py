@@ -8,6 +8,7 @@ import re
 import shlex
 import struct
 import subprocess
+import sys
 import wave
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -178,7 +179,20 @@ def transition(
     return result
 
 
+def _read_command_windows(pid: int) -> str:
+    """There is no `ps` on Windows: psutil reads the command line, quoted the
+    Windows way, which process_matches splits back into the same argv."""
+    import psutil
+
+    try:
+        return subprocess.list2cmdline(psutil.Process(pid).cmdline())
+    except psutil.Error:
+        return ""
+
+
 def _read_command(pid: int) -> str:
+    if sys.platform == "win32":
+        return _read_command_windows(pid)
     return subprocess.run(
         ["ps", "-p", str(pid), "-o", "command="],
         capture_output=True,
@@ -203,9 +217,14 @@ def process_matches(
     if not command:
         return False
     try:
-        args = shlex.split(command)
+        # a Windows command line is not POSIX shell: backslashes there are path
+        # separators, and quotes are stripped by hand after a non-POSIX split
+        windows = sys.platform == "win32"
+        args = shlex.split(command, posix=not windows)
     except ValueError:
         return False
+    if windows:
+        args = [arg.strip('"') for arg in args]
     if marker not in args:
         return False
     expected = str(session_dir)

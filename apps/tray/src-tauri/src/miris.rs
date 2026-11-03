@@ -132,6 +132,7 @@ fn parse_manifest(dir: &Path) -> Option<SessionManifest> {
     }
 }
 
+#[cfg(not(windows))]
 fn ps_command(pid: i32) -> String {
     Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "command="])
@@ -140,12 +141,32 @@ fn ps_command(pid: i32) -> String {
         .unwrap_or_default()
 }
 
+/// There is no `ps` on Windows: the command line comes from the process
+/// itself (see win32_process.rs).
+#[cfg(windows)]
+fn ps_command(pid: i32) -> String {
+    crate::win32_process::command_line(pid)
+}
+
 /// The process must name both the marker module and this exact session dir,
 /// mirroring the Python identity check: a recycled PID never looks alive.
+#[cfg(not(windows))]
 fn command_matches(command: &str, marker: &str, dir: &Path) -> bool {
     let dir = dir.to_string_lossy().into_owned();
     command.split_whitespace().any(|t| t == marker)
         && command.split_whitespace().any(|t| t == dir)
+}
+
+/// Windows: arguments are double-quoted when they hold spaces, and the two
+/// sides spell the session dir differently - the tray joins `~/.miris` with
+/// backslashes after a forward slash, Python writes backslashes only, and the
+/// filesystem ignores case. Compare what the paths mean, not their spelling.
+#[cfg(windows)]
+fn command_matches(command: &str, marker: &str, dir: &Path) -> bool {
+    let norm = |s: &str| s.replace('/', "\\").to_lowercase();
+    let dir = norm(&dir.to_string_lossy());
+    let args = crate::win32_process::split_command_line(command);
+    args.iter().any(|t| t == marker) && args.iter().any(|t| norm(t) == dir)
 }
 
 fn derive_state(
@@ -348,8 +369,33 @@ mod tests {
 
     #[test]
     fn run_cli_captures_stdout_and_stderr() {
+        // `echo` is a shell builtin on Windows, not an exe; `where where`
+        // prints its own location from System32, which is always on PATH
+        #[cfg(windows)]
+        assert!(run_cli("where", &["where"]).unwrap().to_lowercase().contains("where.exe"));
+        #[cfg(not(windows))]
         assert_eq!(run_cli("echo", &["start"]).unwrap().trim(), "start");
         assert!(run_cli("/nonexistent-bin-xyz", &["start"]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_command_line_names_its_marker_and_session() {
+        let dir = Path::new(r"C:\Users\a b/.miris\sessions\20260914-120000");
+        let cmd = r#""C:\Program Files\VOXIS\miris-engine.exe" -m miris.recorder "C:\Users\a b\.miris\sessions\20260914-120000""#;
+        assert!(command_matches(cmd, "miris.recorder", dir));
+        assert!(!command_matches(cmd, "miris.pipeline", dir));
+        assert!(!command_matches(cmd, "miris.recorder", Path::new(r"C:\other")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn this_process_reads_its_own_command_line() {
+        let line = crate::win32_process::command_line(std::process::id() as i32);
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_stem().unwrap().to_string_lossy().to_lowercase();
+        assert!(line.to_lowercase().contains(&name), "{line:?} lacks {name}");
+        assert_eq!(crate::win32_process::command_line(0), "");
     }
 
     fn write_manifest(root: &Path, id: &str, state: &str, pid: Option<i32>) {

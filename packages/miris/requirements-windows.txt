@@ -1,0 +1,33 @@
+# Windows-specific requirements for Miris (torch-free)
+# Used for PyInstaller frozen builds and isolated Windows environments
+
+# Core dependencies
+numpy>=1.24.0
+sounddevice>=0.4.6
+
+# System audio capture (WASAPI loopback)
+# Primary choice: soundcard (pure-Python via CFFI, no compilation needed)
+soundcard>=0.4.6
+
+# Silero VAD over ONNX (laris.vad_onnx) splits each meeting channel into
+# utterances, in place of silero-vad, which would pull torch
+onnxruntime>=1.17
+
+# Process command lines for the CLI's recorder check (there is no `ps`)
+psutil>=5.9
+
+# Transcription via the sibling laris package (whisper.cpp backend, no torch).
+# MUST be the local path: PyPI publishes an unrelated project called "laris"
+# (0.9.3, single-cell bioinformatics), so a bare `laris` here installs the
+# wrong code and drags in anndata/scanpy. The frozen exe would then fail on
+# `from laris.stt_whispercpp import ...` - windowed, i.e. silently.
+-e ../laris
+
+# Testing (optional, for development)
+pytest>=8.0.0
+
+# Excluded:
+# - torch, torchaudio (STT runs through the bundled whisper.cpp binaries)
+# - silero-vad (the same model runs over onnxruntime instead, see above)
+# - mlx (macOS-only, not needed on Windows)
+# - pyobjc (macOS-only, not needed on Windows)
