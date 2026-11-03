@@ -11,7 +11,10 @@ def _setting(key: str, default: str) -> str:
 
 
 MODE = _setting("ASSISTANT_MODE", "ptt")  # "ptt" | "always_on"
-DICTATE_KEY = _setting("DICTATE_KEY", "cmd_r")
+import sys as _sys
+# cmd_r does not exist on Windows; right-shift is a comfortable PTT key there
+# and is in hotkey.py's allowed set. Users change it in the tray settings.
+DICTATE_KEY = _setting("DICTATE_KEY", "shift_r" if _sys.platform == "win32" else "cmd_r")
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 512               # Silero VAD window at 16 kHz
@@ -24,7 +27,10 @@ VAD_MIN_SILENCE_MS = 400
 # from 20.6% to 17.7% replaying a recorded conversation (2026-10-15)
 PREROLL_MS = 200
 
-NOISE_REDUCTION: str = _setting("NOISE_REDUCTION", "on")  # "on" | "off"
+# The Windows bundle is torch-free (no DeepFilterNet), so denoise there would
+# pass audio through and warn once per utterance: default it off on Windows.
+NOISE_REDUCTION: str = _setting(
+    "NOISE_REDUCTION", "off" if _sys.platform == "win32" else "on")  # "on" | "off"
 
 # q4: benchmarked 2026-07-11 vs the f16 turbo - 0.76s vs 0.95s per utterance
 # and ~1.2GB less resident RAM, transcription quality tied on pt-BR samples.
@@ -33,6 +39,14 @@ STT_MODEL: str = _setting("STT_MODEL", "mlx-community/whisper-large-v3-turbo-q4"
 # Linux backend (faster-whisper / CTranslate2). Same turbo model family as the
 # mlx default; runs float16 on CUDA, int8 on CPU.
 STT_MODEL_FASTER: str = _setting("STT_MODEL_FASTER", "large-v3-turbo")
+# whisper.cpp GGML model for the Windows backend (a file name, not the
+# mlx repo id STT_MODEL holds). Downloaded on first use into
+# ~/.config/voice-at/models. The turbo weights match what macOS runs
+# (mlx-community/whisper-large-v3-turbo-q4): 4 decoder layers, ~8x faster
+# decode than full large-v3, and the q5_0 quantization measured identical
+# word-for-word to the unquantized output on pt-BR. Point this at another ggml
+# file (name in the models dir, or an absolute path) to override.
+STT_MODEL_GGML: str = _setting("STT_MODEL_GGML", "ggml-large-v3-turbo-q5_0.bin")
 # empty string = Whisper auto-detect per utterance (used by miris for
 # bilingual meetings); laris dictation keeps the pt-BR lock by default
 STT_LANGUAGE: str = os.environ.get("STT_LANGUAGE", "pt")

@@ -60,6 +60,35 @@
     finally { fetchInFlight = false; }
   }
 
+  // --- lazy three.js loading ---
+  const THEMES_WITH_THREE = ["faceted"];
+  let threeLoadPromise = null;
+
+  function loadThreeJS() {
+    if (window.THREE) return Promise.resolve();
+    if (threeLoadPromise) return threeLoadPromise;
+
+    threeLoadPromise = new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "/static/vendor/three.min.js";
+      script.onload = resolve;
+      script.onerror = resolve;  // fail gracefully, keep waveform
+      document.head.appendChild(script);
+    });
+
+    return threeLoadPromise;
+  }
+
+  const originalMountTheme = mountTheme;
+  mountTheme = function mountThemeWithThree() {
+    const needsThree = THEMES_WITH_THREE.includes(theme.archetype);
+    if (needsThree && !window.THREE) {
+      loadThreeJS().then(() => originalMountTheme());
+    } else {
+      originalMountTheme();
+    }
+  };
+
   // --- voice state (ported ballistics: attack .55, release .10, pulse .88) ---
   let t = 0, targetEnergy = 0, smoothedVoice = 0, activationPulse = 0;
   let active = false, idleFrameSkip = 0;

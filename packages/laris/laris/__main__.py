@@ -18,6 +18,8 @@ import uvicorn
 
 from laris import config, peer_discovery
 from laris.auth import generate_token
+from laris.orb_state import OrbStateManager
+from laris.runtime_mode import ModeState
 from laris.peer_client import KirisClient, PanelClient
 from laris.server import build_app
 from laris.state_machine import VoiceSession
@@ -109,7 +111,11 @@ def main(argv: list[str] | None = None) -> None:
     peer_discovery.write_peer("laris", f"http://127.0.0.1:{LARIS_PORT}", token=laris_token)
 
     voice_queue = queue.Queue()
-    app = build_app(token=laris_token, voice_queue=voice_queue)
+    orb_state = OrbStateManager()
+    # One instance, two readers: POST /mode writes it, the PTT loop reads it.
+    mode_state = ModeState(config.MODE)
+    app = build_app(token=laris_token, voice_queue=voice_queue, orb_state=orb_state,
+                    mode_state=mode_state)
     # probe once at boot: macOS applies permission changes only on restart, so
     # a cached value is exact for this process's lifetime and the tray reads it
     # over /theme to warn when push-to-talk lacks Accessibility/Input Monitoring
@@ -123,6 +129,14 @@ def main(argv: list[str] | None = None) -> None:
         trigger_label, stt_model = trigger.label, config.STT_MODEL_FASTER
         # requirements-linux.txt leaves DeepFilterNet (import name `df`) out,
         # and audio_capture then passes audio through untouched
+        denoise = config.NOISE_REDUCTION
+        if denoise == "on" and importlib.util.find_spec("df") is None:
+            denoise = "off (DeepFilterNet not installed)"
+    elif sys.platform == "win32":
+        from laris.hotkey import PushToTalk
+        app.state.ptt_trusted = PushToTalk.check_trusted()
+        trigger_label, stt_model = f"PTT: {config.DICTATE_KEY}", config.STT_MODEL_GGML
+        # the Windows bundle leaves torch, and with it DeepFilterNet, out
         denoise = config.NOISE_REDUCTION
         if denoise == "on" and importlib.util.find_spec("df") is None:
             denoise = "off (DeepFilterNet not installed)"
@@ -186,6 +200,8 @@ def main(argv: list[str] | None = None) -> None:
         overlay_url=f"http://127.0.0.1:{LARIS_PORT}/overlay?token={laris_token}",
         on_ready=lambda: setattr(app.state, "ready", True),
         trigger=trigger,
+        orb_state=orb_state,
+        mode_state=mode_state,
     )
 
 

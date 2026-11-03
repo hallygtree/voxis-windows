@@ -123,3 +123,13 @@ def position_rect(theme: dict, screen_w: float, screen_h: float) -> tuple[float,
     else:  # center
         y = (screen_h - size) / 2
     return x, y
+
+
+def position_rect_topleft(theme: dict, screen_w: float, screen_h: float) -> tuple[float, float, float, float]:
+    """(x, y, w, h) with top-left origin (Win32/Tauri convention).
+
+    Converts the bottom-left origin from position_rect() to top-left by
+    inverting the Y axis: y_topleft = screen_h - y_bottomleft - size."""
+    x, y_bottom = position_rect(theme, screen_w, screen_h)
+    size = float(theme["size"])
+    return x, screen_h - y_bottom - size, size, size

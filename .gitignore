@@ -1,1 +1,13 @@
 __pycache__/
+
+.claude/settings.local.json
+.venv*/
+test-local.ps1
+
+# whisper.cpp binaries staged by the Windows build (see windows.yml); native
+# output rebuilt from a pinned upstream tag, never committed
+packages/*/whispercpp/
+whisper.cpp/
+
+# Silero VAD model fetched by the Windows build from a pinned upstream tag
+packages/laris/assets/
