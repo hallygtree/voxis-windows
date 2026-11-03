@@ -1,0 +1,161 @@
+name: windows
+
+# The Windows build of this fork: tests on every push and pull request, and
+# the installer (laris-engine + miris-engine frozen into the Tauri tray) on a
+# v* tag or a manual run. Upstream's tray-build.yml (macOS) and linux.yml stay
+# untouched and are disabled in this fork's Actions settings, so syncing with
+# upstream never conflicts here.
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# tauri-action drafts a release and uploads assets on tag runs
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      # build the installer on tags and manual runs; plain pushes only test
+      SHIP: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
+    steps:
+      # actions pinned by commit SHA (a moved tag can ship malicious code) -
+      # comments track the human-readable version
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      # SHA pin loses the channel the @stable tag name carries, so name it
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master @ 2026-07-17
+        with:
+          toolchain: stable
+
+      - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: apps/tray/src-tauri
+
+      # Silero VAD: hands-free in laris and meeting segmentation in miris both
+      # run it over onnxruntime. Pinned tag, MIT, 2.2 MB; shipped in the
+      # installer, and the specs hard-fail without it.
+      - name: Fetch the Silero VAD model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path packages/laris/assets | Out-Null
+          curl.exe -sSL --fail -o packages/laris/assets/silero_vad.onnx `
+            "https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx"
+          $size = (Get-Item packages/laris/assets/silero_vad.onnx).Length
+          "silero_vad.onnx: {0:N0} bytes" -f $size
+          if ($size -lt 500000) { throw "silero_vad.onnx looks truncated ($size bytes)" }
+
+      - name: Install the engines
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r packages/laris/requirements-windows.txt pytest httpx pyinstaller
+          pip install -e packages/laris
+          # miris's file installs ../laris from the path - PyPI's "laris" is
+          # an unrelated project - so it runs from its own directory
+          Push-Location packages/miris
+          pip install -r requirements-windows.txt
+          pip install -e .
+          Pop-Location
+
+      # Upstream's suites run unedited: the plugin skips what needs a
+      # macOS/Linux-only module or a POSIX shell fixture, and *_linux* files
+      # import evdev at module level.
+      - name: Python tests
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.github/scripts
+        run: |
+          foreach ($pkg in @("laris", "miris")) {
+            Push-Location packages/$pkg
+            python -m pytest -q -p pytest_windows_skips --ignore-glob="*_linux*"
+            $code = $LASTEXITCODE
+            Pop-Location
+            if ($code -ne 0) { exit $code }
+          }
+
+      - name: Install frontend deps
+        working-directory: apps/tray
+        run: npm ci
+
+      - name: Rust tests
+        working-directory: apps/tray/src-tauri
+        run: cargo test
+
+      # whisper.cpp is the Windows STT engine. Upstream publishes no Vulkan
+      # build, so it is built here from a pinned tag; Vulkan accelerates AMD
+      # and Intel as well as NVIDIA, and its loader ships with the driver. The
+      # cache is written from master by whispercpp-cache.yml: caches are scoped
+      # by ref, so one written by a tag run is invisible to the next tag.
+      - name: whisper.cpp (Vulkan)
+        if: env.SHIP == 'true'
+        uses: ./.github/actions/whispercpp-build
+
+      # Separate from the build so it runs on a cache hit too, and a cache
+      # that restored something unusable fails here instead of shipping.
+      - name: Stage whisper.cpp for both engines
+        if: env.SHIP == 'true'
+        shell: pwsh
+        working-directory: whisper.cpp
+        run: |
+          foreach ($dest in @("../packages/laris/whispercpp", "../packages/miris/whispercpp")) {
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Copy-Item build/bin/Release/*.exe $dest -Force
+            Copy-Item build/bin/Release/*.dll $dest -Force
+          }
+          foreach ($needed in @("whisper-server.exe", "parakeet-cli.exe", "ggml-vulkan.dll")) {
+            if (-not (Test-Path "../packages/laris/whispercpp/$needed")) {
+              throw "$needed is missing - the engines cannot transcribe without it"
+            }
+          }
+          Get-ChildItem ../packages/laris/whispercpp | ForEach-Object { "{0,12:N0}  {1}" -f $_.Length, $_.Name }
+
+      # onedir outputs staged where tauri.windows.conf.json bundles them
+      - name: Freeze the engines
+        if: env.SHIP == 'true'
+        shell: pwsh
+        run: |
+          foreach ($pkg in @(@("laris", "engine"), @("miris", "engine-miris"))) {
+            $name, $stage = $pkg
+            Push-Location packages/$name
+            pyinstaller packaging/$name.spec --noconfirm
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $dest = "../../apps/tray/src-tauri/$stage"
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Copy-Item -Recurse -Force "dist/$name-engine/*" $dest
+            Pop-Location
+          }
+
+      # Tag runs draft a GitHub release with the installers; manual runs only
+      # build, and the next step uploads them as an artifact.
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        if: env.SHIP == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/tray
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('VOXIS {0}', github.ref_name) || '' }}
+          releaseDraft: true
+
+      - name: Upload installers (manual runs)
+        if: env.SHIP == 'true' && !startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voxis-windows
+          path: |
+            apps/tray/src-tauri/target/release/bundle/msi/*.msi
+            apps/tray/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
