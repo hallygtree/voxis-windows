@@ -12,13 +12,15 @@ on:
   pull_request:
   workflow_dispatch:
 
-# tauri-action drafts a release and uploads assets on tag runs
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
     runs-on: windows-latest
+    # tauri-action drafts a release and uploads assets on tag runs
+    permissions:
+      contents: write
     env:
       # build the installer on tags and manual runs; plain pushes only test
       SHIP: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}

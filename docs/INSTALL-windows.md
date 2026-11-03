@@ -141,3 +141,10 @@ git merge upstream/master
 Resolve conflicts in favour of upstream's code and put the Windows hook back
 on top, then open a pull request into this fork's `master` and merge once
 `windows.yml` is green. Merge, never rebase: `master` is public.
+
+`master` is protected by a ruleset, with no bypass. Every change goes in
+through a pull request that is up to date with `master`, has its review
+threads resolved, passes `windows`, `rust`, `npm` and
+`SonarCloud Code Analysis`, and is merged with a merge commit (squash and
+rebase are disabled, since a squashed sync loses upstream's history). `v*`
+tags cannot be moved or deleted.
