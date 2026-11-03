@@ -1,6 +1,9 @@
 mod commands;
 mod laris;
 mod miris;
+// The orb is a tray window only on Windows; elsewhere the daemon draws its own
+// and these are no-op stubs.
+mod overlay;
 mod settings;
 
 use std::path::PathBuf;
@@ -19,6 +22,14 @@ const POSITIONS: [&str; 6] = [
     "center", "top-left", "top-center", "top-right", "bottom-left", "bottom-right",
 ];
 
+/// What the engine is doing while it boots. Text and fraction travel together
+/// so the menu label and the bar can never disagree.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BootStatus {
+    pub text: Option<String>,
+    pub progress: Option<f64>,
+}
+
 pub struct AppState {
     pub config: settings::TrayConfig,
     pub daemon: Mutex<laris::LarisDaemon>,
@@ -27,6 +38,13 @@ pub struct AppState {
     /// when the action fails, so the next poll tick must rebuild regardless
     /// of whether the snapshot changed.
     pub menu_dirty: AtomicBool,
+    /// Last orb rect from the 2s poll, read by the Windows long-poll thread
+    /// so showing the orb needs no extra GET /theme.
+    pub last_orb_rect: Mutex<Option<overlay::OrbRect>>,
+    /// Boot progress the Windows long-poll thread reads off /overlay/state,
+    /// shown in the dictation label and the tooltip while the model loads. A
+    /// 547 MB first-run download with no sign of life reads as a hung app.
+    pub boot_status: Mutex<BootStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -42,6 +60,8 @@ struct Snapshot {
     dictating: bool, // the daemon's toggle left the mic listening (Linux)
     has_last_note: bool,
     theme: Option<(String, String, String)>, // (archetype, palette, position)
+    rect: Option<overlay::OrbRect>, // Windows: where the orb window goes, logical px
+    boot_status: BootStatus,        // what the engine is doing while !laris_ready
 }
 
 /// One primary action represents only the active session; a second item
@@ -113,6 +133,51 @@ fn dictation_status_label(alive: bool, ready: bool) -> &'static str {
     }
 }
 
+/// The status row, with the engine's own account of a slow boot when it gives
+/// one (Windows: downloading the model, compiling GPU shaders).
+fn dictation_label(snap: &Snapshot) -> String {
+    if snap.laris_alive && !snap.laris_ready {
+        match (snap.boot_status.text.as_deref(), snap.boot_status.progress) {
+            (Some(text), Some(p)) if !text.is_empty() => {
+                return format!("Carregando: {text} {}", progress_bar(p));
+            }
+            (Some(text), None) if !text.is_empty() => return format!("Carregando: {text}"),
+            _ => {}
+        }
+    }
+    dictation_status_label(snap.laris_alive, snap.laris_ready).to_owned()
+}
+
+/// `0.43` -> `████░░░░░░ 43%`. A native menu item is text, so the bar is
+/// block characters.
+fn progress_bar(fraction: f64) -> String {
+    const CELLS: usize = 10;
+    let clamped = fraction.clamp(0.0, 1.0);
+    let filled = (clamped * CELLS as f64).round() as usize;
+    format!(
+        "{}{} {:.0}%",
+        "\u{2588}".repeat(filled),
+        "\u{2591}".repeat(CELLS - filled),
+        clamped * 100.0
+    )
+}
+
+/// Hover text for the tray icon: an open native menu does not repaint, so this
+/// is where a changing boot progress is actually seen.
+fn tray_tooltip(snap: &Snapshot) -> String {
+    if snap.laris_alive && !snap.laris_ready {
+        return match (snap.boot_status.text.as_deref(), snap.boot_status.progress) {
+            (Some(text), Some(p)) => format!("VOXIS - {text}\n{}", progress_bar(p)),
+            (Some(text), None) => format!("VOXIS - {text}"),
+            _ => "VOXIS - carregando modelo...".to_owned(),
+        };
+    }
+    if is_recording(snap) {
+        return "VOXIS - reunião em andamento".to_owned();
+    }
+    "VOXIS".to_owned()
+}
+
 fn hands_free_enabled(alive: bool, ready: bool) -> bool {
     alive && ready
 }
@@ -141,7 +206,25 @@ fn sessions_dir(state: &AppState) -> PathBuf {
     PathBuf::from(&state.config.miris_home).join("sessions")
 }
 
-fn take_snapshot(state: &AppState) -> Snapshot {
+/// The primary monitor's work area in logical pixels - what the daemon places
+/// the orb against - and its origin. Work area, not size: a "bottom-*" orb
+/// lands above the taskbar instead of behind it.
+#[cfg(windows)]
+fn orb_screen(app: &AppHandle) -> Option<((f64, f64), (f64, f64))> {
+    let monitor = app.primary_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let size = area.size.to_logical::<f64>(scale);
+    let pos = area.position.to_logical::<f64>(scale);
+    Some(((size.width, size.height), (pos.x, pos.y)))
+}
+
+#[cfg(not(windows))]
+fn orb_screen(_app: &AppHandle) -> Option<((f64, f64), (f64, f64))> {
+    None // the daemon draws and places its own orb
+}
+
+fn take_snapshot(app: &AppHandle, state: &AppState) -> Snapshot {
     let sessions = sessions_dir(state);
     let snap = miris::snapshot(&sessions);
     let meeting = snap.active.as_ref().map(|v| {
@@ -160,7 +243,21 @@ fn take_snapshot(state: &AppState) -> Snapshot {
     let laris_alive = peer.as_ref().map(|p| laris::alive(&p.url)).unwrap_or(false);
     // ponytail: theme fetched every tick while laris is up - localhost HTTP,
     // negligible; cache only if it ever shows up in a profile
-    let theme_body = peer.filter(|_| laris_alive).and_then(|p| laris::get_theme(&p).ok());
+    let screen = orb_screen(app);
+    let theme_body = peer
+        .filter(|_| laris_alive)
+        .and_then(|p| laris::get_theme(&p, screen.map(|(size, _)| size)).ok());
+    // the daemon answers in work-area coordinates; the window wants the
+    // desktop's, which differ when the primary monitor is not at the origin
+    let rect = theme_body.as_ref().and_then(|b| b.get("rect")).and_then(|r| {
+        let (ox, oy) = screen.map(|(_, origin)| origin).unwrap_or_default();
+        Some(overlay::OrbRect {
+            x: ox + r.get("x")?.as_f64()?,
+            y: oy + r.get("y")?.as_f64()?,
+            w: r.get("w")?.as_f64()?,
+            h: r.get("h")?.as_f64()?,
+        })
+    });
     // absent field = old daemon: default trusted so we never nag on unknowns
     let ptt_trusted = theme_body
         .as_ref()
@@ -196,6 +293,8 @@ fn take_snapshot(state: &AppState) -> Snapshot {
         dictating,
         has_last_note: snap.last_note.is_some(),
         theme,
+        rect,
+        boot_status: state.boot_status.lock().map(|b| b.clone()).unwrap_or_default(),
     }
 }
 
@@ -235,13 +334,21 @@ fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
     let dictation = MenuItem::with_id(
         app,
         "dictation_status",
-        dictation_status_label(snap.laris_alive, snap.laris_ready),
+        dictation_label(snap),
         false, // disabled: nothing to click
         None::<&str>,
     )?;
     items.push(Box::new(dictation));
+    // With a key, the checkbox only permits hands-free: the double-tap starts
+    // it, and this label is the only place a user learns that. Linux's toggle
+    // shortcut is the start itself.
+    let hands_free_label = if cfg!(target_os = "linux") {
+        "Hands-free"
+    } else {
+        "Hands-free (toque duplo na tecla)"
+    };
     let hands_free = CheckMenuItem::with_id(
-        app, "hands_free", "Hands-free",
+        app, "hands_free", hands_free_label,
         hands_free_enabled(snap.laris_alive, snap.laris_ready),
         snap.hands_free, None::<&str>,
     )?;
@@ -467,15 +574,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
                     notify(&app2, &format!("Falha ao salvar: {e}"));
                     return;
                 }
-                // settings load at daemon start only - restart our own daemon to apply
-                let state = app2.state::<AppState>();
-                let mut daemon = state.daemon.lock().unwrap();
-                if daemon.owns_running() {
-                    daemon.stop();
-                    if let Err(e) = daemon.spawn() {
-                        notify(&app2, &format!("Falha ao reiniciar ditado: {e}"));
-                    }
-                }
+                apply_mode(&app2, next);
             });
         }
         id if id.starts_with("theme:") => {
@@ -490,6 +589,86 @@ fn handle_menu(app: &AppHandle, id: &str) {
         }
         _ => {}
     }
+}
+
+/// Pushes ASSISTANT_MODE to the live daemon, falling back to a restart only
+/// when it cannot be reached over HTTP (an engine from before /mode, or a
+/// wedged one). Restarting a reachable daemon for this destroyed the orb and
+/// reloaded the model, which is indistinguishable from a crash.
+pub fn apply_mode(app: &AppHandle, mode: &str) {
+    if let Some(peer) = laris::read_peer(&peers_path()) {
+        if laris::set_mode(&peer, mode).is_ok() {
+            return;
+        }
+    }
+    let state = app.state::<AppState>();
+    let mut daemon = state.daemon.lock().unwrap();
+    if daemon.owns_running() {
+        daemon.stop();
+        if let Err(e) = daemon.spawn() {
+            notify(app, &format!("Falha ao reiniciar ditado: {e}"));
+        }
+    }
+    // not running and not ours: the file just written is what its next boot reads
+}
+
+/// Windows: follow /overlay/state - show or hide the orb window the moment
+/// the daemon does, and publish boot progress for the menu and tooltip. The
+/// request itself waits up to 20s for a change, so this is one open call, not
+/// a busy loop.
+#[cfg(windows)]
+fn spawn_orb_state_follower(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last_visible = false;
+        let mut serial = 0i64;
+        let mut backoff = Duration::from_secs(1);
+        loop {
+            std::thread::sleep(backoff);
+            let Some(peer) = laris::read_peer(&peers_path()) else {
+                backoff = Duration::from_secs(1);
+                continue;
+            };
+            match laris::get_overlay_state(&peer, serial, 20.0) {
+                Ok(orb) => {
+                    backoff = Duration::from_millis(100);
+                    let state = app.state::<AppState>();
+                    let incoming = BootStatus { text: orb.status.clone(), progress: orb.progress };
+                    if let Ok(mut current) = state.boot_status.lock() {
+                        if *current != incoming {
+                            *current = incoming;
+                            // the 2s tick rebuilds the menu; dirty makes it
+                            // repaint even though nothing else moved
+                            state.menu_dirty.store(true, Ordering::SeqCst);
+                        }
+                    }
+                    serial = orb.serial;
+                    if orb.visible != last_visible {
+                        last_visible = orb.visible;
+                        let app2 = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            if let Some(peer) = laris::read_peer(&peers_path()) {
+                                let state = app2.state::<AppState>();
+                                let rect = state.last_orb_rect.lock().ok().and_then(|r| *r);
+                                let url = overlay::overlay_url(&peer);
+                                let _ = overlay::sync(&app2, &url, rect, last_visible);
+                            }
+                        });
+                    }
+                }
+                Err(_) => {
+                    // daemon down, restarting or refusing a stale token: hide
+                    if last_visible {
+                        last_visible = false;
+                        let app2 = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            let _ = overlay::sync(&app2, "", None, false);
+                        });
+                    }
+                    backoff = (backoff * 2).min(Duration::from_secs(5));
+                }
+            }
+        }
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -514,16 +693,33 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             ensure_mic_access();
 
-            let config = settings::load_tray_config();
-            let daemon = laris::LarisDaemon::new(
-                PathBuf::from(&config.laris_dir),
-                Some(settings::config_dir().join("laris.log")),
-            );
+            let mut config = settings::load_tray_config();
+            let log = settings::config_dir().join("laris.log");
+            let resource_dir = app.path().resource_dir().ok();
+            // the installer ships miris frozen as a resource; tray.json's
+            // default only exists where the pip install does
+            config.miris_bin =
+                settings::effective_miris_bin(&config.miris_bin, resource_dir.as_deref());
+            // Windows installer: the frozen engine beside the tray. is_file,
+            // not exists: engine/ ships a .gitkeep placeholder.
+            #[cfg(windows)]
+            let engine = resource_dir
+                .as_ref()
+                .map(|r| r.join("engine").join("laris-engine.exe"))
+                .filter(|p| p.is_file());
+            #[cfg(not(windows))]
+            let engine: Option<PathBuf> = None;
+            let daemon = match engine {
+                Some(bin) => laris::LarisDaemon::with_engine(bin, log),
+                None => laris::LarisDaemon::new(PathBuf::from(&config.laris_dir), Some(log)),
+            };
             app.manage(AppState {
                 config,
                 daemon: Mutex::new(daemon),
                 processing: AtomicBool::new(false),
                 menu_dirty: AtomicBool::new(false),
+                last_orb_rect: Mutex::new(None),
+                boot_status: Mutex::new(BootStatus::default()),
             });
 
             // The model costs ~3.6s and 276MB to load. Loading it once per
@@ -543,7 +739,7 @@ pub fn run() {
                 }
             }
 
-            let snap = take_snapshot(&app.state::<AppState>());
+            let snap = take_snapshot(app.handle(), &app.state::<AppState>());
             let menu = build_menu(app.handle(), &snap)?;
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?;
             let tray = TrayIconBuilder::with_id("voxis")
@@ -566,10 +762,23 @@ pub fn run() {
                 let mut respawn_attempts: u32 = 0;
                 const RESPAWN_CAP: u32 = 3;
                 loop {
-                    std::thread::sleep(Duration::from_secs(2));
+                    // 2s in slices: a flag raised mid-tick (a click, the boot
+                    // finishing) repaints in ~250ms instead of up to 2s later
+                    {
+                        let state = handle.state::<AppState>();
+                        for _ in 0..8 {
+                            std::thread::sleep(Duration::from_millis(250));
+                            if state.menu_dirty.load(Ordering::SeqCst) {
+                                break;
+                            }
+                        }
+                    }
                     let state = handle.state::<AppState>();
                     let dirty = state.menu_dirty.swap(false, Ordering::SeqCst);
-                    let current = take_snapshot(&state);
+                    let current = take_snapshot(&handle, &state);
+                    if let Ok(mut rect) = state.last_orb_rect.lock() {
+                        *rect = current.rect;
+                    }
 
                     // recover from a dead tray-owned daemon (crash, OOM, a
                     // model download that failed on first boot) - every other
@@ -612,13 +821,29 @@ pub fn run() {
                             if let Ok(menu) = build_menu(&handle2, &current) {
                                 let _ = tray.set_menu(Some(menu));
                             }
+                            let _ = tray.set_tooltip(Some(tray_tooltip(&current)));
                             if recording_changed {
                                 set_tray_icon(&tray, shows_live_icon(&current));
                             }
                         }
+                        // Windows orb window: this tick owns its URL, size and
+                        // position (visibility belongs to the state follower).
+                        // sync() is idempotent, and calling it every tick is
+                        // what hands a restarted daemon's new token to the
+                        // window; a dead daemon's window is torn down.
+                        #[cfg(windows)]
+                        match laris::read_peer(&peers_path()).filter(|_| current.laris_alive) {
+                            Some(peer) => {
+                                let url = overlay::overlay_url(&peer);
+                                let _ = overlay::sync(&handle2, &url, current.rect, false);
+                            }
+                            None => overlay::close(&handle2),
+                        }
                     });
                 }
             });
+            #[cfg(windows)]
+            spawn_orb_state_follower(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -642,6 +867,51 @@ fn should_prevent_exit(code: Option<i32>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_bar_fills_proportionally() {
+        assert_eq!(progress_bar(0.0), "░░░░░░░░░░ 0%");
+        assert_eq!(progress_bar(1.0), "██████████ 100%");
+        assert_eq!(progress_bar(0.5), "█████░░░░░ 50%");
+        // 10 cells, so 43% rounds to 4 filled - the label keeps the real value
+        assert_eq!(progress_bar(0.43), "████░░░░░░ 43%");
+    }
+
+    #[test]
+    fn progress_bar_clamps_instead_of_panicking() {
+        // a bad number from the engine must not take the tray down
+        assert_eq!(progress_bar(-1.0), "░░░░░░░░░░ 0%");
+        assert_eq!(progress_bar(2.5), "██████████ 100%");
+    }
+
+    fn loading(text: &str, progress: Option<f64>) -> Snapshot {
+        Snapshot {
+            laris_alive: true,
+            laris_ready: false,
+            boot_status: BootStatus { text: Some(text.to_owned()), progress },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_loading_engine_says_what_it_is_doing() {
+        let snap = loading("baixando modelo 43% de 547 MB", Some(0.43));
+        assert!(dictation_label(&snap).contains("baixando modelo"));
+        let tip = tray_tooltip(&snap);
+        assert!(tip.contains("baixando modelo") && tip.contains("████"), "{tip}");
+        let quiet = tray_tooltip(&loading("carregando modelo", None));
+        assert!(!quiet.contains('█'), "{quiet}");
+    }
+
+    #[test]
+    fn an_engine_that_reports_nothing_keeps_the_generic_labels() {
+        let snap = Snapshot { laris_alive: true, laris_ready: false, ..Default::default() };
+        assert_eq!(dictation_label(&snap), "Carregando modelo...");
+        assert_eq!(tray_tooltip(&snap), "VOXIS - carregando modelo...");
+        let ready = Snapshot { laris_alive: true, laris_ready: true, ..Default::default() };
+        assert_eq!(dictation_label(&ready), "Ditado ativo");
+        assert_eq!(tray_tooltip(&ready), "VOXIS");
+    }
 
     #[test]
     fn closing_the_settings_window_must_not_exit_the_tray() {

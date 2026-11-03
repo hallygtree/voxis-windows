@@ -132,6 +132,7 @@ fn parse_manifest(dir: &Path) -> Option<SessionManifest> {
     }
 }
 
+#[cfg(not(windows))]
 fn ps_command(pid: i32) -> String {
     Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "command="])
@@ -140,12 +141,133 @@ fn ps_command(pid: i32) -> String {
         .unwrap_or_default()
 }
 
+/// There is no `ps` on Windows: the command line comes from the process
+/// itself (see win32::command_line).
+#[cfg(windows)]
+fn ps_command(pid: i32) -> String {
+    win32::command_line(pid)
+}
+
 /// The process must name both the marker module and this exact session dir,
 /// mirroring the Python identity check: a recycled PID never looks alive.
+#[cfg(not(windows))]
 fn command_matches(command: &str, marker: &str, dir: &Path) -> bool {
     let dir = dir.to_string_lossy().into_owned();
     command.split_whitespace().any(|t| t == marker)
         && command.split_whitespace().any(|t| t == dir)
+}
+
+/// Windows: arguments are double-quoted when they hold spaces, and the two
+/// sides spell the session dir differently - the tray joins `~/.miris` with
+/// backslashes after a forward slash, Python writes backslashes only, and the
+/// filesystem ignores case. Compare what the paths mean, not their spelling.
+#[cfg(windows)]
+fn command_matches(command: &str, marker: &str, dir: &Path) -> bool {
+    let norm = |s: &str| s.replace('/', "\\").to_lowercase();
+    let dir = norm(&dir.to_string_lossy());
+    let args = win32::split_command_line(command);
+    args.iter().any(|t| t == marker) && args.iter().any(|t| norm(t) == dir)
+}
+
+/// Raw ntdll/kernel32 bindings rather than a crate: four calls with a fixed
+/// C ABI, against windows-sys feature names that move between releases.
+#[cfg(windows)]
+mod win32 {
+    use std::ffi::c_void;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    /// PROCESSINFOCLASS::ProcessCommandLineInformation (Windows 8.1+).
+    const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
+
+    #[repr(C)]
+    struct UnicodeString {
+        length: u16, // bytes, not characters
+        maximum_length: u16,
+        buffer: *const u16,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit_handle: i32, pid: u32) -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtQueryInformationProcess(
+            handle: *mut c_void, class: u32, info: *mut c_void, len: u32, ret_len: *mut u32,
+        ) -> i32;
+    }
+
+    /// The process's command line, or "" when it is gone or not ours to read
+    /// - both of which the caller must read as "not the recorder".
+    pub fn command_line(pid: i32) -> String {
+        if pid <= 0 {
+            return String::new();
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            if handle.is_null() {
+                return String::new();
+            }
+            // the first call sizes the buffer; u64 storage keeps it aligned
+            // for the UNICODE_STRING header the kernel writes at its start
+            let mut needed = 0u32;
+            NtQueryInformationProcess(
+                handle, PROCESS_COMMAND_LINE_INFORMATION, std::ptr::null_mut(), 0, &mut needed,
+            );
+            let mut buf = vec![0u64; (needed as usize).div_ceil(8).max(2)];
+            let status = NtQueryInformationProcess(
+                handle,
+                PROCESS_COMMAND_LINE_INFORMATION,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * 8) as u32,
+                &mut needed,
+            );
+            CloseHandle(handle);
+            if status < 0 {
+                return String::new();
+            }
+            let header = &*(buf.as_ptr() as *const UnicodeString);
+            if header.buffer.is_null() {
+                return String::new();
+            }
+            let chars = std::slice::from_raw_parts(header.buffer, header.length as usize / 2);
+            String::from_utf16_lossy(chars)
+        }
+    }
+
+    /// Splits a command line the way Python's list2cmdline built it: spaces
+    /// separate arguments unless inside double quotes, which are dropped.
+    /// Backslash escapes before a quote are not handled - nothing here passes
+    /// an argument that ends in a backslash or contains a quote.
+    pub fn split_command_line(command: &str) -> Vec<String> {
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut quoted = false;
+        let mut started = false;
+        for c in command.chars() {
+            match c {
+                '"' => {
+                    quoted = !quoted;
+                    started = true;
+                }
+                c if c.is_whitespace() && !quoted => {
+                    if started {
+                        args.push(std::mem::take(&mut current));
+                        started = false;
+                    }
+                }
+                c => {
+                    current.push(c);
+                    started = true;
+                }
+            }
+        }
+        if started {
+            args.push(current);
+        }
+        args
+    }
 }
 
 fn derive_state(
@@ -348,8 +470,33 @@ mod tests {
 
     #[test]
     fn run_cli_captures_stdout_and_stderr() {
+        // `echo` is a shell builtin on Windows, not an exe; `where where`
+        // prints its own location from System32, which is always on PATH
+        #[cfg(windows)]
+        assert!(run_cli("where", &["where"]).unwrap().to_lowercase().contains("where.exe"));
+        #[cfg(not(windows))]
         assert_eq!(run_cli("echo", &["start"]).unwrap().trim(), "start");
         assert!(run_cli("/nonexistent-bin-xyz", &["start"]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_command_line_names_its_marker_and_session() {
+        let dir = Path::new(r"C:\Users\a b/.miris\sessions\20260914-120000");
+        let cmd = r#""C:\Program Files\VOXIS\miris-engine.exe" -m miris.recorder "C:\Users\a b\.miris\sessions\20260914-120000""#;
+        assert!(command_matches(cmd, "miris.recorder", dir));
+        assert!(!command_matches(cmd, "miris.pipeline", dir));
+        assert!(!command_matches(cmd, "miris.recorder", Path::new(r"C:\other")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn this_process_reads_its_own_command_line() {
+        let line = win32::command_line(std::process::id() as i32);
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_stem().unwrap().to_string_lossy().to_lowercase();
+        assert!(line.to_lowercase().contains(&name), "{line:?} lacks {name}");
+        assert_eq!(win32::command_line(0), "");
     }
 
     fn write_manifest(root: &Path, id: &str, state: &str, pid: Option<i32>) {

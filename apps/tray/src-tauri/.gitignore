@@ -6,10 +6,12 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 
-# CI stages the frozen engine here before bundling; keep only its placeholder.
+# CI stages the frozen engines here before bundling; keep only the placeholders.
 engine/*
 !engine/.gitkeep
 
 # Built by build-mic-helper.sh at bundle time from grant-mic.swift.
 /resources/GrantMic.app
 /binaries
+engine-miris/*
+!engine-miris/.gitkeep
