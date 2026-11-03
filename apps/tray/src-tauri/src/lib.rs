@@ -345,7 +345,7 @@ fn build_menu(app: &AppHandle, snap: &Snapshot) -> tauri::Result<Menu<Wry>> {
     let hands_free_label = if cfg!(target_os = "linux") {
         "Hands-free"
     } else {
-        "Hands-free (toque duplo na tecla)"
+        "Hands-free (duplo-toque na tecla)"
     };
     let hands_free = CheckMenuItem::with_id(
         app, "hands_free", hands_free_label,
@@ -694,7 +694,6 @@ pub fn run() {
             ensure_mic_access();
 
             let mut config = settings::load_tray_config();
-            let log = settings::config_dir().join("laris.log");
             let resource_dir = app.path().resource_dir().ok();
             // the installer ships miris frozen as a resource; tray.json's
             // default only exists where the pip install does
@@ -709,9 +708,14 @@ pub fn run() {
                 .filter(|p| p.is_file());
             #[cfg(not(windows))]
             let engine: Option<PathBuf> = None;
+            let logs = settings::config_dir();
             let daemon = match engine {
-                Some(bin) => laris::LarisDaemon::with_engine(bin, log),
-                None => laris::LarisDaemon::new(PathBuf::from(&config.laris_dir), Some(log)),
+                // its own name: the frozen engine's log is what a Windows user sends in
+                Some(bin) => laris::LarisDaemon::with_engine(bin, logs.join("laris-engine.log")),
+                None => laris::LarisDaemon::new(
+                    PathBuf::from(&config.laris_dir),
+                    Some(logs.join("laris.log")),
+                ),
             };
             app.manage(AppState {
                 config,
