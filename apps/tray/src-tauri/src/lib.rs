@@ -5,6 +5,8 @@ mod miris;
 // and these are no-op stubs.
 mod overlay;
 mod settings;
+#[cfg(windows)]
+mod win32_process;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -206,24 +208,6 @@ fn sessions_dir(state: &AppState) -> PathBuf {
     PathBuf::from(&state.config.miris_home).join("sessions")
 }
 
-/// The primary monitor's work area in logical pixels - what the daemon places
-/// the orb against - and its origin. Work area, not size: a "bottom-*" orb
-/// lands above the taskbar instead of behind it.
-#[cfg(windows)]
-fn orb_screen(app: &AppHandle) -> Option<((f64, f64), (f64, f64))> {
-    let monitor = app.primary_monitor().ok().flatten()?;
-    let scale = monitor.scale_factor();
-    let area = monitor.work_area();
-    let size = area.size.to_logical::<f64>(scale);
-    let pos = area.position.to_logical::<f64>(scale);
-    Some(((size.width, size.height), (pos.x, pos.y)))
-}
-
-#[cfg(not(windows))]
-fn orb_screen(_app: &AppHandle) -> Option<((f64, f64), (f64, f64))> {
-    None // the daemon draws and places its own orb
-}
-
 fn take_snapshot(app: &AppHandle, state: &AppState) -> Snapshot {
     let sessions = sessions_dir(state);
     let snap = miris::snapshot(&sessions);
@@ -243,7 +227,7 @@ fn take_snapshot(app: &AppHandle, state: &AppState) -> Snapshot {
     let laris_alive = peer.as_ref().map(|p| laris::alive(&p.url)).unwrap_or(false);
     // ponytail: theme fetched every tick while laris is up - localhost HTTP,
     // negligible; cache only if it ever shows up in a profile
-    let screen = orb_screen(app);
+    let screen = overlay::screen(app);
     let theme_body = peer
         .filter(|_| laris_alive)
         .and_then(|p| laris::get_theme(&p, screen.map(|(size, _)| size)).ok());
@@ -612,65 +596,6 @@ pub fn apply_mode(app: &AppHandle, mode: &str) {
     // not running and not ours: the file just written is what its next boot reads
 }
 
-/// Windows: follow /overlay/state - show or hide the orb window the moment
-/// the daemon does, and publish boot progress for the menu and tooltip. The
-/// request itself waits up to 20s for a change, so this is one open call, not
-/// a busy loop.
-#[cfg(windows)]
-fn spawn_orb_state_follower(app: AppHandle) {
-    std::thread::spawn(move || {
-        let mut last_visible = false;
-        let mut serial = 0i64;
-        let mut backoff = Duration::from_secs(1);
-        loop {
-            std::thread::sleep(backoff);
-            let Some(peer) = laris::read_peer(&peers_path()) else {
-                backoff = Duration::from_secs(1);
-                continue;
-            };
-            match laris::get_overlay_state(&peer, serial, 20.0) {
-                Ok(orb) => {
-                    backoff = Duration::from_millis(100);
-                    let state = app.state::<AppState>();
-                    let incoming = BootStatus { text: orb.status.clone(), progress: orb.progress };
-                    if let Ok(mut current) = state.boot_status.lock() {
-                        if *current != incoming {
-                            *current = incoming;
-                            // the 2s tick rebuilds the menu; dirty makes it
-                            // repaint even though nothing else moved
-                            state.menu_dirty.store(true, Ordering::SeqCst);
-                        }
-                    }
-                    serial = orb.serial;
-                    if orb.visible != last_visible {
-                        last_visible = orb.visible;
-                        let app2 = app.clone();
-                        let _ = app.run_on_main_thread(move || {
-                            if let Some(peer) = laris::read_peer(&peers_path()) {
-                                let state = app2.state::<AppState>();
-                                let rect = state.last_orb_rect.lock().ok().and_then(|r| *r);
-                                let url = overlay::overlay_url(&peer);
-                                let _ = overlay::sync(&app2, &url, rect, last_visible);
-                            }
-                        });
-                    }
-                }
-                Err(_) => {
-                    // daemon down, restarting or refusing a stale token: hide
-                    if last_visible {
-                        last_visible = false;
-                        let app2 = app.clone();
-                        let _ = app.run_on_main_thread(move || {
-                            let _ = overlay::sync(&app2, "", None, false);
-                        });
-                    }
-                    backoff = (backoff * 2).min(Duration::from_secs(5));
-                }
-            }
-        }
-    });
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -847,7 +772,7 @@ pub fn run() {
                 }
             });
             #[cfg(windows)]
-            spawn_orb_state_follower(app.handle().clone());
+            overlay::spawn_state_follower(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -148,6 +148,87 @@ pub fn sync(_app: &tauri::AppHandle, _url: &str, _rect: Option<OrbRect>, _visibl
 #[cfg(not(windows))]
 pub fn close(_app: &tauri::AppHandle) {}
 
+/// The primary monitor's work area in logical pixels - what the daemon places
+/// the orb against - and its origin. Work area, not size: a "bottom-*" orb
+/// lands above the taskbar instead of behind it.
+#[cfg(windows)]
+pub fn screen(app: &tauri::AppHandle) -> Option<((f64, f64), (f64, f64))> {
+    let monitor = app.primary_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let size = area.size.to_logical::<f64>(scale);
+    let pos = area.position.to_logical::<f64>(scale);
+    Some(((size.width, size.height), (pos.x, pos.y)))
+}
+
+#[cfg(not(windows))]
+pub fn screen(_app: &tauri::AppHandle) -> Option<((f64, f64), (f64, f64))> {
+    None // the daemon draws and places its own orb
+}
+
+/// Windows: follow /overlay/state - show or hide the orb window the moment
+/// the daemon does, and publish boot progress for the menu and tooltip. The
+/// request itself waits up to 20s for a change, so this is one open call, not
+/// a busy loop.
+#[cfg(windows)]
+pub fn spawn_state_follower(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use tauri::Manager;
+
+    std::thread::spawn(move || {
+        let mut last_visible = false;
+        let mut serial = 0i64;
+        let mut backoff = Duration::from_secs(1);
+        loop {
+            std::thread::sleep(backoff);
+            let Some(peer) = crate::laris::read_peer(&crate::peers_path()) else {
+                backoff = Duration::from_secs(1);
+                continue;
+            };
+            match crate::laris::get_overlay_state(&peer, serial, 20.0) {
+                Ok(orb) => {
+                    backoff = Duration::from_millis(100);
+                    let state = app.state::<crate::AppState>();
+                    let incoming = crate::BootStatus { text: orb.status.clone(), progress: orb.progress };
+                    if let Ok(mut current) = state.boot_status.lock() {
+                        if *current != incoming {
+                            *current = incoming;
+                            // the 2s tick rebuilds the menu; dirty makes it
+                            // repaint even though nothing else moved
+                            state.menu_dirty.store(true, Ordering::SeqCst);
+                        }
+                    }
+                    serial = orb.serial;
+                    if orb.visible != last_visible {
+                        last_visible = orb.visible;
+                        let app2 = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            if let Some(peer) = crate::laris::read_peer(&crate::peers_path()) {
+                                let state = app2.state::<crate::AppState>();
+                                let rect = state.last_orb_rect.lock().ok().and_then(|r| *r);
+                                let url = overlay_url(&peer);
+                                let _ = sync(&app2, &url, rect, last_visible);
+                            }
+                        });
+                    }
+                }
+                Err(_) => {
+                    // daemon down, restarting or refusing a stale token: hide
+                    if last_visible {
+                        last_visible = false;
+                        let app2 = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            let _ = sync(&app2, "", None, false);
+                        });
+                    }
+                    backoff = (backoff * 2).min(Duration::from_secs(5));
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
