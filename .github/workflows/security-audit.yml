@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  checks: write # audit-check publishes its result as a check run on push/schedule
 
 # Covers the cross-platform artifact shipped to users (the Tauri tray).
 # The Python engines are macOS-only (mlx has no Linux wheel, so pip-audit
