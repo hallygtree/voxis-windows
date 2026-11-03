@@ -47,7 +47,7 @@ else:
 # STT is not here: faster_whisper/ctranslate2 were dropped with the CUDA-only
 # backend, and av/tokenizers/huggingface_hub came in only as their dependencies
 # (audio is read with the stdlib `wave` module). onnxruntime is back, but for
-# the VAD alone - miris does no streaming detection and does not collect it.
+# the VAD alone (miris-engine bundles its own copy for meeting segmentation).
 for pkg in ("sounddevice", "onnxruntime"):
     d, b, h = collect_all(pkg)
     datas += d

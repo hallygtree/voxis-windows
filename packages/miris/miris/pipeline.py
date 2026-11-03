@@ -1,6 +1,7 @@
 """Post-meeting pipeline: WAVs -> transcript -> notes -> vault note."""
 import json
 import os
+import sys
 import datetime as dt
 import dataclasses
 from pathlib import Path
@@ -55,6 +56,11 @@ def _default_transcriber_factory():
     # INITIAL_PROMPT is dictation jargon from LARIS's settings file; on
     # conversation it costs accuracy and leaks its words into fillers
     config.INITIAL_PROMPT = ""
+    if sys.platform == "win32":
+        # Whisper only: Parakeet, dictation's no-GPU fallback, punctuates worse
+        # and covers 25 languages - a bad trade for a transcript nobody waits on
+        from laris.platform.windows import WindowsBackend
+        return _BackendTranscriber(WindowsBackend(allow_parakeet=False))
     return _BackendTranscriber(get_backend())
 
 

@@ -148,3 +148,52 @@ def test_state_is_reset_between_utterances(monkeypatch):
     list(capture.stream_utterances(should_stop=should_stop))
     # once at the start of the stream, once when the utterance closed
     assert vad.resets >= 2
+
+
+class _ScriptedVad:
+    """One probability per 512-sample window, in order."""
+
+    def __init__(self, probs):
+        self._probs = iter(probs)
+
+    def reset(self):
+        pass
+
+    def probability(self, chunk):
+        assert len(chunk) == 512
+        return next(self._probs, 0.0)
+
+
+def test_speech_spans_finds_each_utterance_with_padding():
+    from laris.vad_onnx import speech_spans
+
+    # 10 windows speech, 10 silence, 12 speech, 10 silence (512 samples each)
+    probs = [0.9] * 10 + [0.0] * 10 + [0.9] * 12 + [0.0] * 10
+    audio = np.zeros(512 * len(probs), dtype=np.float32)
+
+    spans = speech_spans(audio, vad=_ScriptedVad(probs))
+
+    pad = 16000 * 30 // 1000
+    assert spans == [(0, 512 * 10 + pad), (512 * 20 - pad, 512 * 32 + pad)]
+
+
+def test_speech_spans_drops_blips_and_bridges_short_pauses():
+    from laris.vad_onnx import speech_spans
+
+    # a 2-window blip (64 ms < 250 ms) is dropped; a 2-window dip inside
+    # speech (64 ms < 100 ms of silence) does not split the utterance
+    probs = [0.9] * 2 + [0.0] * 10 + [0.9] * 10 + [0.0] * 2 + [0.9] * 10 + [0.0] * 10
+    audio = np.zeros(512 * len(probs), dtype=np.float32)
+
+    spans = speech_spans(audio, vad=_ScriptedVad(probs), pad_ms=0)
+
+    assert spans == [(512 * 12, 512 * 34)]
+
+
+def test_speech_spans_keeps_speech_running_to_the_end_of_the_file():
+    from laris.vad_onnx import speech_spans
+
+    probs = [0.0] * 5 + [0.9] * 20
+    audio = np.zeros(512 * len(probs), dtype=np.float32)
+
+    assert speech_spans(audio, vad=_ScriptedVad(probs), pad_ms=0) == [(512 * 5, 512 * 25)]

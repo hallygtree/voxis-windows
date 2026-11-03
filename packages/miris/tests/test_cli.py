@@ -1,3 +1,6 @@
+import threading
+import time
+from miris.config import STOP_SENTINEL
 import io
 import os
 import struct
@@ -318,3 +321,109 @@ def test_the_doctor_reports_an_empty_llm_command_instead_of_crashing(tmp_path, m
     out = _doctor_output_for_llm_command(tmp_path, monkeypatch, capsys, [])
 
     assert "[FAIL] llm_command: " in out
+
+
+# --- Windows fork ---
+
+
+def test_cmd_start_reports_what_the_recorder_logged_when_it_dies(tmp_path, monkeypatch):
+    """Armadilha nº1: the recorder is detached and the frozen build is
+    windowed, so its traceback exists only in recorder.log. Blaming microphone
+    permissions while an ImportError sits unread in that file is the failure
+    mode this project keeps paying for."""
+    cfg = _cfg(tmp_path)
+
+    def fake_popen(args, **kwargs):
+        Path(args[-1]).joinpath("recorder.log").write_text(
+            "Traceback (most recent call last):\n"
+            "ModuleNotFoundError: No module named 'soundcard'\n",
+            encoding="utf-8")
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)  # don't wait 5s
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.cmd_start(cfg)
+    message = str(excinfo.value)
+    assert "ModuleNotFoundError" in message
+    assert "recorder.log" in message
+
+
+def test_cmd_start_says_so_when_the_log_is_empty(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda args, **kw: None)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.cmd_start(cfg)
+    assert "logged nothing" in str(excinfo.value)
+
+
+def _recording_session(cfg, pid=4242):
+    import dataclasses
+
+    from miris import session as session_mod
+
+    session_dir = cfg.sessions_dir / "20260716-1000"
+    session_dir.mkdir(parents=True)
+    session_mod.create(session_dir)
+    manifest = session_mod.transition(session_dir, session_mod.SessionState.RECORDING)
+    manifest = dataclasses.replace(manifest, recorder_pid=pid)
+    session_mod.write(session_dir, manifest)
+    return session_dir, manifest
+
+
+def test_stop_on_windows_asks_the_recorder_through_the_sentinel(tmp_path, monkeypatch):
+    """On Windows os.kill is TerminateProcess: killing the recorder there
+    truncates mic.wav/system.wav. `miris stop` drops the sentinel instead and
+    waits for the recorder to finish on its own."""
+    from miris import session as session_mod
+
+    cfg = _cfg(tmp_path)
+    session_dir, manifest = _recording_session(cfg)
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(session_mod, "process_matches", lambda *a, **k: True)
+    signals = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: signals.append(sig))
+
+    def fake_recorder():  # stands in for the detached recorder process
+        for _ in range(500):
+            if (session_dir / STOP_SENTINEL).exists():
+                session_mod.transition(session_dir, session_mod.SessionState.STOPPING)
+                session_mod.transition(session_dir, session_mod.SessionState.CAPTURED)
+                return
+            time.sleep(0.01)
+
+    worker = threading.Thread(target=fake_recorder)
+    worker.start()
+    try:
+        result = cli.stop_recorder(session_dir, manifest, timeout_s=5.0)
+    finally:
+        worker.join(timeout=5)
+
+    assert (session_dir / STOP_SENTINEL).exists(), "the sentinel is the stop channel"
+    assert signals == [], "os.kill on Windows is TerminateProcess"
+    assert result.state is session_mod.SessionState.CAPTURED
+
+
+def test_stop_on_windows_still_kills_a_wedged_recorder(tmp_path, monkeypatch):
+    """A recorder that ignores the sentinel must not hang the caller forever -
+    the tray runs `miris stop` synchronously. Windows has no SIGKILL."""
+    import signal
+
+    from miris import session as session_mod
+
+    cfg = _cfg(tmp_path)
+    session_dir, manifest = _recording_session(cfg)
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)
+    monkeypatch.setattr(session_mod, "process_matches", lambda *a, **k: True)
+    killed = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    started = time.monotonic()
+    result = cli.stop_recorder(session_dir, manifest, timeout_s=0.3)
+
+    assert time.monotonic() - started < 5, "must give up instead of blocking"
+    assert killed == [(4242, signal.SIGTERM)]
+    assert result.state is session_mod.SessionState.INTERRUPTED

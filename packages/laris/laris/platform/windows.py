@@ -40,7 +40,10 @@ class WindowsBackend:
     # live from the first second.
     warms_in_background = True
 
-    def __init__(self) -> None:
+    def __init__(self, allow_parakeet: bool = True) -> None:
+        # Dictation only needs text, so it takes the fast Parakeet fallback
+        # when there is no GPU; miris opts out (see miris/pipeline.py).
+        self._allow_parakeet = allow_parakeet
         self._stt = None
         self._stt_lock = threading.Lock()
         self._orb_state = None
@@ -67,10 +70,7 @@ class WindowsBackend:
         with self._stt_lock:
             if self._stt is None:
                 from laris.stt_whispercpp import WhisperCppTranscriber
-                # Dictation only needs text, so the fast Parakeet fallback is
-                # allowed when there is no GPU. Miris opts out of it - see
-                # miris/pipeline.py.
-                self._stt = WhisperCppTranscriber(allow_parakeet=True,
+                self._stt = WhisperCppTranscriber(allow_parakeet=self._allow_parakeet,
                                                   on_status=self._status_sink)
             return self._stt
 

@@ -157,3 +157,56 @@ class OnnxVadCapture:
                         if config.NOISE_REDUCTION == "on":
                             audio = _denoise_chunk(audio, enabled=True)
                         yield audio, config.SAMPLE_RATE
+
+
+_WINDOW = 512  # the only window the 16 kHz model accepts
+
+
+def speech_spans(audio: np.ndarray, sr: int = 16000, vad=None,
+                 threshold: float = 0.5, min_speech_ms: int = 250,
+                 min_silence_ms: int = 100, pad_ms: int = 30) -> list[tuple[int, int]]:
+    """Whole-file (start, end) sample spans: the offline counterpart of
+    silero's get_speech_timestamps, with its defaults, over this same model.
+
+    miris splits a recorded meeting channel with it where torch is absent.
+    Speech starts at `threshold` and ends only after `min_silence_ms` below
+    `threshold - 0.15`, the same hysteresis as the streaming path; spans
+    shorter than `min_speech_ms` are dropped, and each keeps `pad_ms` on both
+    sides without overlapping its neighbour."""
+    vad = vad if vad is not None else SileroOnnxVad()
+    vad.reset()
+    end_below = threshold - _NEG_THRESHOLD_OFFSET
+    min_speech = sr * min_speech_ms // 1000
+    min_silence = sr * min_silence_ms // 1000
+    pad = sr * pad_ms // 1000
+
+    raw: list[tuple[int, int]] = []
+    start: int | None = None
+    quiet_from: int | None = None
+    for i in range(0, len(audio), _WINDOW):
+        chunk = audio[i:i + _WINDOW]
+        if len(chunk) < _WINDOW:
+            chunk = np.pad(chunk, (0, _WINDOW - len(chunk)))
+        p = vad.probability(chunk)
+        if p >= threshold:
+            quiet_from = None
+            if start is None:
+                start = i
+        elif start is not None and p < end_below:
+            if quiet_from is None:
+                quiet_from = i
+            if i + _WINDOW - quiet_from >= min_silence:
+                if quiet_from - start >= min_speech:
+                    raw.append((start, quiet_from))
+                start = quiet_from = None
+    if start is not None and len(audio) - start >= min_speech:
+        raw.append((start, quiet_from if quiet_from is not None else len(audio)))
+
+    spans: list[tuple[int, int]] = []
+    for s, e in raw:
+        s, e = max(0, s - pad), min(len(audio), e + pad)
+        if spans and s <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], e))
+        else:
+            spans.append((s, e))
+    return spans

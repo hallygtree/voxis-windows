@@ -14,6 +14,11 @@ from collections.abc import Callable
 
 from miris import config, session
 
+# Windows: no console for the recorder (the frozen build is windowed) and its
+# own process group, so a console Ctrl+C aimed at the CLI does not reach it.
+_DETACHED = ({"creationflags": 0x00000200 | 0x00000008}  # NEW_PROCESS_GROUP | DETACHED_PROCESS
+             if sys.platform == "win32" else {})
+
 
 def _live_session(cfg: config.Config):
     """Newest session with a live recorder pid, or (None, None). Stale pidfiles
@@ -27,7 +32,7 @@ def _live_session(cfg: config.Config):
         try:
             pid = int(pid_file.read_text())
             os.kill(pid, 0)
-        except (ValueError, ProcessLookupError, PermissionError):
+        except (ValueError, OSError):  # Windows raises a bare OSError for a dead pid
             pid_file.unlink(missing_ok=True)  # corrupt or stale
             continue
         return session_dir, pid
@@ -85,10 +90,16 @@ def stop_recorder(
     if pid is None or not session.process_matches(pid, "miris.recorder", session_dir):
         sys.exit(f"recorder pid does not belong to {session_dir.name}")
 
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    if sys.platform == "win32":
+        # os.kill is TerminateProcess here: it would kill the recorder before
+        # it closes both WAVs. The sentinel asks it to stop itself
+        # (recorder.watch_stop_sentinel).
+        (session_dir / config.STOP_SENTINEL).touch()
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     current = wait_for_state(
         session_dir,
         {session.SessionState.CAPTURED, session.SessionState.INTERRUPTED},
@@ -99,7 +110,7 @@ def stop_recorder(
 
     if session.process_matches(pid, "miris.recorder", session_dir):
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))  # Windows: no SIGKILL
         except ProcessLookupError:
             pass
     return session.transition(
@@ -128,7 +139,7 @@ def cmd_start(cfg: config.Config) -> None:
         log = log_path.open("ab")
         subprocess.Popen([sys.executable, "-m", "miris.recorder", str(session_dir)],
                          start_new_session=True, stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=log)
+                         stdout=log, stderr=log, **_DETACHED)
     except OSError as exc:
         session.transition(session_dir, session.SessionState.FAILED,
                            error=_error("startup_failed", str(exc)))
@@ -159,7 +170,27 @@ def cmd_start(cfg: config.Config) -> None:
     if manifest.state is session.SessionState.STARTING:
         session.transition(session_dir, session.SessionState.FAILED,
                            error=_error("startup_timeout", "recorder did not become ready"))
-    sys.exit(f"recorder did not start (check mic / system-audio permissions): {log_path}")
+    sys.exit(_start_failure_message(log_path))
+
+
+def _start_failure_message(log_path: Path) -> str:
+    """Explain why the recorder never came up, using what it actually logged.
+
+    A detached recorder has no console, and the Windows build is windowed, so
+    its stderr exists only in recorder.log. Blaming microphone permissions
+    while an ImportError sits unread in that file sends people the wrong way:
+    quote the log instead of guessing."""
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError as exc:
+        tail = f"(could not read {log_path}: {exc})"
+    if not tail:
+        return (f"recorder did not start and logged nothing to {log_path}. "
+                "It died before Python got going - usually a missing DLL or a "
+                "broken bundle. Check mic / system-audio permissions too.")
+    lines = tail.splitlines()[-15:]
+    return ("recorder did not start; last lines of "
+            f"{log_path}:\n" + "\n".join(lines))
 
 
 def _run_pipeline(session_dir: Path) -> None:
